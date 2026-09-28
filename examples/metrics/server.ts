@@ -21,6 +21,8 @@ const PORT = 9464;
 const INTERVAL_MS = 200;
 // Every Nth fake embedding fails, so the errors panel has something to show.
 const FAIL_EVERY = 40;
+// Share of requests sent in shadow mode, so the shadow panels have data too.
+const SHADOW_SHARE = 0.1;
 
 const pool = new pg.Pool({
 	connectionString:
@@ -155,7 +157,11 @@ async function fakeModel(): Promise<{
 
 setInterval(() => {
 	cache
-		.wrap(fakeModel, { key: nextRequest(), usage: (r) => r.usage })
+		.wrap(fakeModel, {
+			key: nextRequest(),
+			usage: (r) => r.usage,
+			shadow: Math.random() < SHADOW_SHARE,
+		})
 		.catch((error) => console.error("request failed:", error));
 }, INTERVAL_MS);
 

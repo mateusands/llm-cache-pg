@@ -336,7 +336,11 @@
 			],
 			"fieldConfig": {
 				"defaults": {
-					"unit": "short"
+					"unit": "short",
+					"color": {
+						"mode": "fixed",
+						"fixedColor": "green"
+					}
 				},
 				"overrides": []
 			},
@@ -408,6 +412,78 @@
 			"fieldConfig": {
 				"defaults": {
 					"unit": "short"
+				},
+				"overrides": []
+			},
+			"options": {}
+		},
+		{
+			"id": 11,
+			"type": "stat",
+			"title": "Shadow: would-have-hit ratio",
+			"datasource": {
+				"type": "prometheus",
+				"uid": "${datasource}"
+			},
+			"gridPos": {
+				"x": 0,
+				"y": 29,
+				"w": 6,
+				"h": 8
+			},
+			"description": "In shadow mode, the share of lookups the cache would have answered. Nothing was served: the model answered every one.",
+			"targets": [
+				{
+					"expr": "(sum(rate(llm_cache_shadow_lookups_total{result=~\"exact_hit|semantic_hit\",namespace=~\"$namespace\"}[$__rate_interval])) or vector(0)) / (sum(rate(llm_cache_shadow_lookups_total{result!=\"bypass\",namespace=~\"$namespace\"}[$__rate_interval])) > 0)",
+					"datasource": {
+						"type": "prometheus",
+						"uid": "${datasource}"
+					},
+					"refId": "A"
+				}
+			],
+			"fieldConfig": {
+				"defaults": {
+					"unit": "percentunit",
+					"decimals": 1,
+					"color": {
+						"mode": "fixed",
+						"fixedColor": "blue"
+					}
+				},
+				"overrides": []
+			},
+			"options": {}
+		},
+		{
+			"id": 12,
+			"type": "timeseries",
+			"title": "Shadow lookups by result",
+			"datasource": {
+				"type": "prometheus",
+				"uid": "${datasource}"
+			},
+			"gridPos": {
+				"x": 6,
+				"y": 29,
+				"w": 18,
+				"h": 8
+			},
+			"description": "Shadow-mode lookups by what would have happened. Only has data when shadow mode is on for some traffic.",
+			"targets": [
+				{
+					"expr": "sum by (result) (rate(llm_cache_shadow_lookups_total{namespace=~\"$namespace\"}[$__rate_interval]))",
+					"legendFormat": "{{result}}",
+					"datasource": {
+						"type": "prometheus",
+						"uid": "${datasource}"
+					},
+					"refId": "A"
+				}
+			],
+			"fieldConfig": {
+				"defaults": {
+					"unit": "reqps"
 				},
 				"overrides": []
 			},

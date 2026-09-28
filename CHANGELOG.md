@@ -8,11 +8,17 @@ All notable changes to this project. The format follows [Keep a Changelog](https
 
 - Anthropic streams with web search, web fetch or tool search are stored and replayed, tool input included.
 - Shadow mode (`shadow: true` on the cache or per call): every request is looked up but the model is always called; `onShadow` receives each hit that would have been served next to the fresh answer. Misses are still stored. Counted in `llm_cache_shadow_lookups_total`, never as tokens saved.
+- Grafana dashboard: shadow panels (would-have-hit ratio, shadow lookups by result). The metrics demo sends 10% of its traffic in shadow mode so they have data.
 - `cache.stats()`: exact entry counts, expired entries, hits, table and index size, and the top namespaces and models. The CLI's `stats` uses it.
 
 ### Changed
 
 - Anthropic answers that ran code (code execution, bash, text editor, container uploads) or carry a `container` are no longer stored, streamed or not. The container they point at expires, so a replay would hand back a dead id.
+
+### Fixed
+
+- The metrics demo mounted the dashboard as a single file, so Grafana kept serving the old version after an edit. It now mounts the folder.
+- The similarity panel colored large bars red, which read as an error.
 
 ## [0.5.0] - 2026-09-28
 

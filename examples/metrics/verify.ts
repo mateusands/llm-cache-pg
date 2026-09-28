@@ -11,6 +11,7 @@ const METRICS = [
 	"llm_cache_lookup_duration_seconds_count",
 	"llm_cache_similarity_count",
 	"llm_cache_errors_total",
+	"llm_cache_shadow_lookups_total",
 	"llm_cache_entries",
 ];
 
