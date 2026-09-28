@@ -11,8 +11,33 @@ const run = (cmd, args, cwd = dir) =>
 	execFileSync(cmd, args, { cwd, stdio: "inherit" });
 
 try {
-	run("pnpm", ["pack", "--pack-destination", dir], root);
-	const tarball = readdirSync(dir).find((f) => f.endsWith(".tgz"));
+	// SMOKE_FROM_REGISTRY=0.3.0 checks a published version instead of the local build.
+	const published = process.env.SMOKE_FROM_REGISTRY;
+	let spec = `llm-cache-pg@${published}`;
+	if (!published) {
+		run("pnpm", ["pack", "--pack-destination", dir], root);
+		const tarball = readdirSync(dir).find((f) => f.endsWith(".tgz"));
+
+		// Everything outside dist/ is listed on purpose: a new file in the package should be a decision.
+		const files = execFileSync("tar", ["-tzf", join(dir, tarball)], {
+			encoding: "utf8",
+		})
+			.trim()
+			.split("\n");
+		const extra = files.filter((f) => !f.startsWith("package/dist/")).sort();
+		const expected = [
+			"package/CHANGELOG.md",
+			"package/LICENSE",
+			"package/README.md",
+			"package/README.pt-BR.md",
+			"package/package.json",
+		];
+		if (JSON.stringify(extra) !== JSON.stringify(expected)) {
+			throw new Error(`unexpected package files: ${extra.join(", ")}`);
+		}
+		console.log("package files ok");
+		spec = `./${tarball}`;
+	}
 
 	writeFileSync(
 		join(dir, "package.json"),
@@ -34,7 +59,7 @@ try {
 		"install",
 		"--no-audit",
 		"--no-fund",
-		`./${tarball}`,
+		spec,
 		"typescript@7",
 		"@types/node@22",
 	]);

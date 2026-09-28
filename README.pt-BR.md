@@ -4,7 +4,7 @@
 
 **Cache semântico para chamadas de LLM em TypeScript, sobre PostgreSQL puro + pgvector.** Roda em qualquer Postgres com pgvector (RDS, Supabase, Neon, self-hosted), sem extensão customizada para instalar. Envolve sua chamada à OpenAI ou à Anthropic em uma linha, isola os dados por tenant e exporta métricas para o Prometheus.
 
-> **Status: v0.2, ainda não publicado no npm.** O cache, os wrappers da OpenAI e da Anthropic, a migração, a limpeza, as métricas para o Prometheus e um benchmark estão implementados e testados contra Postgres real. O dashboard do Grafana vem a seguir (veja o [Roadmap](#roadmap)). A API ainda pode mudar antes da 1.0.
+> **Status: v0.3.** Antes da 1.0, a API ainda pode mudar entre versões minor (veja o [changelog](CHANGELOG.md)).
 
 ---
 
@@ -38,9 +38,14 @@ O `llm-cache-pg` vive na sua aplicação, usa o Postgres que você já tem e só
 - **Traga seu embedder:** embeddings da OpenAI já incluídos, ou qualquer `(text, { signal }) => Promise<number[]>`.
 - **Migração** como função ou como SQL puro para a sua ferramenta de migração, com índice HNSW.
 
-Planejado: dashboard do Grafana.
+Inclui um dashboard do Grafana e um demo de métricas executável.
 
 ## Começo rápido
+
+```sh
+npm install llm-cache-pg pg
+npm install openai               # ou @anthropic-ai/sdk, para os wrappers
+```
 
 ```ts
 import pg from "pg";
@@ -64,7 +69,8 @@ const cache = createCache({
 const ai = withCache(openai, cache, { namespace: tenantId });
 const res = await ai.chat.completions.create({ model: "gpt-4.1-mini", messages });
 
-// O mesmo para a Anthropic: import { withCache } from "llm-cache-pg/anthropic"
+// O mesmo para a Anthropic. Usando os dois? Dê um alias a um deles:
+// import { withCache as withAnthropicCache } from "llm-cache-pg/anthropic";
 
 // Opção 2: envolver qualquer chamada cujo resultado seja JSON
 const answer = await cache.wrap(() => callSomeModel(messages), {
@@ -155,6 +161,17 @@ const cache = createCache({ pool, embed, ...prometheusHooks({ client, pool }) })
 | `llm_cache_errors_total` | counter | `stage` |
 | `llm_cache_entries` | gauge | `table`; vem das estatísticas do Postgres, só quando `pool` é passado |
 
+Um dashboard do Grafana está em [grafana/dashboard.json](grafana/dashboard.json). Para vê-lo com tráfego ao vivo, sem chave de API:
+
+```sh
+pnpm build && docker compose -f examples/metrics/docker-compose.yml up
+# abra http://localhost:3000
+```
+
+![Dashboard do Grafana com o demo rodando](grafana/dashboard.png)
+
+O demo manda perguntas de suporte sintéticas pelo cache, com modelo e embedder falsos, então o hit ratio dele não diz nada sobre tráfego real. Com `OPENAI_API_KEY` no `.env`, ele usa embeddings da OpenAI (`DEMO_OFFLINE=1` força os falsos); o modelo continua falso.
+
 Os hooks substituem o `onError`, então os erros são contados em vez de logados; combine os dois se quiser ambos. O label de namespace vem desligado, porque uma série por tenant pode sobrecarregar o Prometheus.
 
 ## Limpeza
@@ -188,7 +205,7 @@ Leia o [CONTRIBUTING.md](CONTRIBUTING.md) (em inglês) antes de abrir um pull re
 
 - [x] v0.1: busca e gravação, wrapper da OpenAI, migração SQL, testes contra Postgres real
 - [x] v0.2: wrapper da Anthropic, prune/invalidate, métricas para o Prometheus, matriz de versões do pgvector, benchmark
-- [ ] v0.3: dashboard do Grafana, publicação no npm
+- [x] v0.3: dashboard do Grafana, demo de métricas, publicação no npm
 - [ ] depois: respostas com streaming, threshold por namespace, CLI de administração
 
 ## Licença

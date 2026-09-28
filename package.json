@@ -1,6 +1,6 @@
 {
 	"name": "llm-cache-pg",
-	"version": "0.0.0",
+	"version": "0.3.0",
 	"description": "Semantic cache for LLM calls on plain PostgreSQL + pgvector",
 	"keywords": [
 		"llm",
@@ -18,12 +18,17 @@
 		"type": "git",
 		"url": "git+https://github.com/mateusands/llm-cache-pg.git"
 	},
+	"homepage": "https://github.com/mateusands/llm-cache-pg#readme",
+	"bugs": {
+		"url": "https://github.com/mateusands/llm-cache-pg/issues"
+	},
 	"type": "module",
 	"engines": {
 		"node": ">=22"
 	},
 	"files": [
-		"dist"
+		"dist",
+		"CHANGELOG.md"
 	],
 	"sideEffects": false,
 	"main": "./dist/index.cjs",
@@ -84,6 +89,10 @@
 		"bench": "node --env-file-if-exists=.env bench/run.ts"
 	},
 	"packageManager": "pnpm@11.26.0",
+	"publishConfig": {
+		"access": "public",
+		"provenance": true
+	},
 	"peerDependencies": {
 		"@anthropic-ai/sdk": ">=0.128.0",
 		"openai": "^7.0.0"
