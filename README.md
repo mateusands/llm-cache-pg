@@ -4,7 +4,7 @@
 
 **Semantic cache for LLM calls in TypeScript, backed by plain PostgreSQL + pgvector.** Runs on any Postgres that has pgvector (RDS, Supabase, Neon, self-hosted) with no custom extension to install. Wraps your OpenAI or Anthropic call in one line, isolates data per tenant, and exports Prometheus metrics.
 
-> **Status: v0.3.** Pre-1.0: the API may still change between minor versions (see the [changelog](CHANGELOG.md)).
+> **Status: v0.4.** Pre-1.0: the API may still change between minor versions (see the [changelog](CHANGELOG.md)).
 
 ---
 
@@ -226,7 +226,8 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
 - [x] v0.1: core lookup/store, OpenAI wrapper, SQL migration, tests against real Postgres
 - [x] v0.2: Anthropic wrapper, prune/invalidate, Prometheus metrics, pgvector version matrix, benchmark
 - [x] v0.3: Grafana dashboard, metrics demo, npm release
-- [ ] later: streaming responses, per-namespace thresholds, admin CLI
+- [x] v0.4: streaming responses, per-call threshold, exact-only mode
+- [ ] later: admin CLI, caching the SDK `.stream()` helpers, streams with non-text content
 
 ## License
 
