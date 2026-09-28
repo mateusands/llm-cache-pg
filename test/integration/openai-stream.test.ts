@@ -8,7 +8,11 @@ import { Stream } from "openai/core/streaming";
 import { ChatCompletionStream } from "openai/lib/ChatCompletionStream";
 import type { ChatCompletionChunk } from "openai/resources/chat/completions";
 import { describe, expect, it, vi } from "vitest";
-import { createCache } from "../../src/cache.ts";
+import {
+	type CacheOptions,
+	createCache,
+	type ShadowEvent,
+} from "../../src/cache.ts";
 import { migrate } from "../../src/migrate.ts";
 import { withCache } from "../../src/openai.ts";
 import { testPool, uniqueTable } from "./db.ts";
@@ -108,6 +112,7 @@ function sdkStream(
 async function setup(
 	make: (signal?: AbortSignal) => Stream<ChatCompletionChunk> = (signal) =>
 		sdkStream(chunks(), undefined, signal),
+	cacheOptions: Partial<CacheOptions> = {},
 ) {
 	const streams: Stream<ChatCompletionChunk>[] = [];
 	const create = vi.fn(
@@ -134,8 +139,20 @@ async function setup(
 	const client = { chat: { completions: { create } } } as unknown as OpenAI;
 	const table = uniqueTable();
 	await migrate(pool, { table, dimensions: 3 });
-	const cache = createCache({ pool, table, embed: async () => [1, 0, 0] });
-	return { create, streams, cache, table, ai: withCache(client, cache) };
+	const cache = createCache({
+		pool,
+		table,
+		embed: async () => [1, 0, 0],
+		...cacheOptions,
+	});
+	return {
+		create,
+		streams,
+		cache,
+		table,
+		client,
+		ai: withCache(client, cache),
+	};
 }
 
 const body = {
@@ -349,6 +366,58 @@ describe("withCache for OpenAI, streaming", () => {
 			await ai.chat.completions.stream(helperBody).finalChatCompletion();
 
 			expect(create).toHaveBeenCalledTimes(2);
+		});
+	});
+
+	describe("shadow mode", () => {
+		it("should stream from the model and report the cached answer once the stream ends", async () => {
+			const shadows: ShadowEvent[] = [];
+			const { ai, cache, create, client } = await setup(undefined, {
+				onShadow: (e) => shadows.push(e),
+			});
+			await drain(await ai.chat.completions.create(body));
+			await cache.flush();
+
+			const shadowAi = withCache(client, cache, { shadow: true });
+			const stream = await shadowAi.chat.completions.create(body);
+			expect(shadows).toEqual([]);
+			await drain(stream);
+
+			expect(create).toHaveBeenCalledTimes(2);
+			expect(shadows).toHaveLength(1);
+			expect(shadows[0]).toMatchObject({ result: "exact_hit", similarity: 1 });
+		});
+
+		it("should not report a shadow hit for an aborted stream", async () => {
+			const shadows: ShadowEvent[] = [];
+			const { ai, cache, client } = await setup(undefined, {
+				onShadow: (e) => shadows.push(e),
+			});
+			await drain(await ai.chat.completions.create(body));
+			await cache.flush();
+
+			const stream = await withCache(client, cache, {
+				shadow: true,
+			}).chat.completions.create(body);
+			for await (const _ of stream) stream.controller.abort();
+
+			expect(shadows).toEqual([]);
+		});
+
+		it("should run the stream() helper against the model in shadow mode", async () => {
+			const shadows: ShadowEvent[] = [];
+			const { ai, cache, create, client } = await setup(undefined, {
+				onShadow: (e) => shadows.push(e),
+			});
+			await drain(await ai.chat.completions.create(body));
+			await cache.flush();
+
+			await withCache(client, cache, { shadow: true })
+				.chat.completions.stream({ model: body.model, messages: body.messages })
+				.finalChatCompletion();
+
+			expect(create).toHaveBeenCalledTimes(2);
+			expect(shadows).toHaveLength(1);
 		});
 	});
 });

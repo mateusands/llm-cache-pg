@@ -41,8 +41,21 @@ export interface LookupEvent {
 	similarity?: number;
 	/** Milliseconds per stage that ran; a stage that was skipped is absent. */
 	durations: Durations;
-	/** Token counts stored with the entry, on a hit. */
+	/** Token counts stored with the entry, on a hit (or what a shadow hit would have saved). */
 	tokens?: { input: number | null; output: number | null };
+	/** True in shadow mode: `result` is what would have happened, and the model was called anyway. */
+	shadow?: boolean;
+}
+
+export interface ShadowEvent {
+	namespace: string;
+	/** What would have been served in live mode. */
+	result: "exact_hit" | "semantic_hit";
+	similarity: number;
+	/** The stored answer that would have been served. */
+	cached: unknown;
+	/** The model's answer, returned to the caller. */
+	fresh: unknown;
 }
 
 export interface Durations {
@@ -72,6 +85,16 @@ export interface CacheOptions {
 	onError?: (error: unknown, stage: ErrorStage) => void;
 	/** Called once per lookup with its outcome. */
 	onLookup?: (event: LookupEvent) => void;
+	/**
+	 * Look up but never serve: the model is always called and every lookup is flagged `shadow`.
+	 * Misses are still stored. Default false.
+	 */
+	shadow?: boolean;
+	/**
+	 * Called in shadow mode when a hit would have been served, with both answers to compare.
+	 * Unlike every other hook, it receives response content.
+	 */
+	onShadow?: (event: ShadowEvent) => void;
 }
 
 export interface CallOptions {
@@ -83,6 +106,8 @@ export interface CallOptions {
 	threshold?: number;
 	/** Overrides the cache-wide `semantic` setting for this call. */
 	semantic?: boolean;
+	/** Overrides the cache-wide `shadow` setting for this call. */
+	shadow?: boolean;
 }
 
 export interface Usage {
@@ -145,7 +170,7 @@ export interface LookupHandle<R> {
 	hit: CachedResponse<R> | null;
 	/**
 	 * Stores the answer in the background (see `flush`). A no-op after a hit, a bypass, a failed
-	 * lookup or a previous call.
+	 * lookup or a previous call. After a shadow hit it stores nothing and reports to `onShadow`.
 	 */
 	store(response: R, options?: { usage?: Usage }): void;
 }
@@ -182,17 +207,21 @@ interface Found<R> {
 	/** Both set when the entry can be stored after the model answers; null means no embedding. */
 	embedding?: number[] | null;
 	setup?: Setup;
+	/** In shadow mode, what would have been served. */
+	shadowHit?: CachedResponse<unknown>;
 }
 
 interface Mode {
 	threshold: number;
 	semantic: boolean;
+	shadow: boolean;
 }
 
 export function createCache(options: CacheOptions): Cache {
 	const { pool, embed } = options;
 	const threshold = validThreshold(options.threshold ?? 0.92);
 	const semantic = options.semantic ?? true;
+	const shadow = options.shadow ?? false;
 	const defaultTtlMs = parseTtl(options.ttl);
 	const { table } = resolveMigrationOptions({
 		...(options.table !== undefined ? { table: options.table } : {}),
@@ -296,7 +325,29 @@ export function createCache(options: CacheOptions): Cache {
 					? threshold
 					: validThreshold(call.threshold),
 			semantic: call?.semantic ?? semantic,
+			shadow: call?.shadow ?? shadow,
 		};
+	}
+
+	const flag = (mode: Mode) => (mode.shadow ? { shadow: true } : {});
+
+	/** Reports a shadow hit once the fresh answer exists and would itself have been stored. */
+	function reportShadow(
+		hit: CachedResponse<unknown>,
+		namespace: string,
+		fresh: unknown,
+	): void {
+		try {
+			options.onShadow?.({
+				namespace,
+				result: hit.result,
+				similarity: hit.similarity,
+				cached: hit.response,
+				fresh,
+			});
+		} catch (error) {
+			report(error, "hit");
+		}
 	}
 
 	let warnedMissingV2 = false;
@@ -351,6 +402,7 @@ export function createCache(options: CacheOptions): Cache {
 				result: "miss",
 				namespace,
 				durations,
+				...flag(mode),
 				...(similarity === undefined ? {} : { similarity }),
 			});
 		const hit = (
@@ -364,7 +416,19 @@ export function createCache(options: CacheOptions): Cache {
 				similarity: match.similarity,
 				durations,
 				tokens: { input: match.tokensIn, output: match.tokensOut },
+				...flag(mode),
 			});
+			// Nothing is served in shadow mode, so the entry's hit count stays as it is.
+			if (mode.shadow) {
+				return {
+					hit: null,
+					shadowHit: {
+						response: match.response,
+						result,
+						similarity: match.similarity,
+					},
+				};
+			}
 			return { hit: hitFrom<R>(match, result, s) };
 		};
 		const timed = async <T>(
@@ -464,7 +528,7 @@ export function createCache(options: CacheOptions): Cache {
 			if (wrapOptions.ttl !== undefined) parseTtl(wrapOptions.ttl);
 			const key = deriveKey(wrapOptions.key);
 			if (!key) {
-				emit({ result: "bypass", namespace, durations: {} });
+				emit({ result: "bypass", namespace, durations: {}, ...flag(mode) });
 				return fn();
 			}
 
@@ -472,11 +536,10 @@ export function createCache(options: CacheOptions): Cache {
 			if (found.hit) return found.hit.response;
 
 			const response = await fn();
-			if (
-				found.setup &&
-				found.embedding !== undefined &&
-				(wrapOptions.shouldStore?.(response) ?? true)
-			) {
+			const storable = wrapOptions.shouldStore?.(response) ?? true;
+			if (found.shadowHit && storable)
+				reportShadow(found.shadowHit, namespace, response);
+			if (found.setup && found.embedding !== undefined && storable) {
 				const write = store(
 					found.setup,
 					namespace,
@@ -501,7 +564,7 @@ export function createCache(options: CacheOptions): Cache {
 			if (callOptions?.ttl !== undefined) parseTtl(callOptions.ttl);
 			const key = deriveKey(keyInput);
 			if (!key) {
-				emit({ result: "bypass", namespace, durations: {} });
+				emit({ result: "bypass", namespace, durations: {}, ...flag(mode) });
 				return { hit: null, store: () => {} };
 			}
 			const found = await find<R>(key, namespace, mode);
@@ -509,8 +572,13 @@ export function createCache(options: CacheOptions): Cache {
 			return {
 				hit: found.hit,
 				store(response, storeOptions) {
-					if (stored || !found.setup || found.embedding === undefined) return;
+					if (stored) return;
 					stored = true;
+					if (found.shadowHit) {
+						reportShadow(found.shadowHit, namespace, response);
+						return;
+					}
+					if (!found.setup || found.embedding === undefined) return;
 					background(
 						store(
 							found.setup,
@@ -531,12 +599,13 @@ export function createCache(options: CacheOptions): Cache {
 			callOptions?: CallOptions,
 		): Promise<CachedResponse<R> | null> {
 			const namespace = resolveNamespace(callOptions?.namespace);
+			const mode = resolveMode(callOptions);
 			const key = deriveKey(keyInput);
 			if (!key) {
-				emit({ result: "bypass", namespace, durations: {} });
+				emit({ result: "bypass", namespace, durations: {}, ...flag(mode) });
 				return null;
 			}
-			return (await find<R>(key, namespace, resolveMode(callOptions))).hit;
+			return (await find<R>(key, namespace, mode)).hit;
 		},
 
 		async set<R>(

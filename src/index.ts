@@ -11,6 +11,7 @@ export type {
 	LookupEvent,
 	LookupHandle,
 	LookupResult,
+	ShadowEvent,
 	Usage,
 	WrapOptions,
 } from "./cache.ts";

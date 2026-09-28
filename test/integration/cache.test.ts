@@ -11,6 +11,7 @@ import {
 	createCache,
 	type ErrorStage,
 	type LookupEvent,
+	type ShadowEvent,
 } from "../../src/cache.ts";
 import type { KeyInput } from "../../src/key.ts";
 import { migrate } from "../../src/migrate.ts";
@@ -521,6 +522,125 @@ describe("flush", () => {
 
 		const { rows } = await pool.query(`SELECT hits FROM ${table}`);
 		expect(rows).toEqual([{ hits: 1 }]);
+	});
+});
+
+describe("shadow mode", () => {
+	async function shadowed(options: Partial<CacheOptions> = {}) {
+		const shadows: ShadowEvent[] = [];
+		const s = await migrated({
+			shadow: true,
+			onShadow: (e) => shadows.push(e),
+			...options,
+		});
+		return { ...s, shadows };
+	}
+
+	it("should always call the model and report what an exact hit would have served", async () => {
+		const { ask, calls, events, shadows, table } = await shadowed();
+
+		const first = await ask("How do I reset my password?");
+		const second = await ask("How do I reset my password?");
+
+		expect(calls()).toBe(2);
+		expect(second).not.toEqual(first);
+		expect(events.map((e) => [e.result, e.shadow])).toEqual([
+			["miss", true],
+			["exact_hit", true],
+		]);
+		expect(shadows).toEqual([
+			{
+				namespace: "default",
+				result: "exact_hit",
+				similarity: 1,
+				cached: first,
+				fresh: second,
+			},
+		]);
+		const { rows } = await pool.query(`SELECT hits FROM ${table}`);
+		expect(rows).toEqual([{ hits: 0 }]);
+	});
+
+	it("should report a semantic hit it would have served", async () => {
+		const { ask, calls, shadows } = await shadowed();
+
+		await ask("How do I reset my password?");
+		await ask("forgot my password, what now?");
+
+		expect(calls()).toBe(2);
+		expect(shadows[0]).toMatchObject({ result: "semantic_hit" });
+		expect(shadows[0]?.similarity).toBeGreaterThan(0.97);
+	});
+
+	it("should store misses, so turning shadow off afterwards serves them", async () => {
+		const { ask, table } = await shadowed();
+		await ask("How do I reset my password?");
+
+		const live = createCache({ pool, embed, table, awaitStore: true });
+		const fn = vi.fn(async () => ({ answer: "fresh" }));
+		await live.wrap(fn, { key: request("How do I reset my password?") });
+
+		expect(fn).not.toHaveBeenCalled();
+	});
+
+	it("should apply shadow per call, in both directions", async () => {
+		const { cache, calls, ask } = await migrated();
+		await ask("How do I reset my password?");
+		const fn = vi.fn(async () => ({ answer: "fresh" }));
+
+		await cache.wrap(fn, {
+			key: request("How do I reset my password?"),
+			shadow: true,
+		});
+		expect(fn).toHaveBeenCalledTimes(1);
+
+		const shadowCache = await shadowed();
+		await shadowCache.ask("cancel my order");
+		const served = vi.fn(async () => ({ answer: "fresh" }));
+		await shadowCache.cache.wrap(served, {
+			key: request("cancel my order"),
+			shadow: false,
+		});
+		expect(served).not.toHaveBeenCalled();
+		expect(calls()).toBe(1);
+	});
+
+	it("should not report a shadow hit for an answer that would not be stored", async () => {
+		const { cache, shadows } = await shadowed();
+		const key = request("How do I reset my password?");
+		await cache.wrap(async () => ({ answer: "a" }), { key });
+
+		await cache.wrap(async () => ({ answer: "b", tool_calls: [{}] }), {
+			key,
+			shouldStore: (r) => !("tool_calls" in r),
+		});
+
+		expect(shadows).toEqual([]);
+	});
+
+	it("should keep working when the shadow hook throws", async () => {
+		const { ask, calls } = await shadowed({
+			onShadow: () => {
+				throw new Error("bad hook");
+			},
+		});
+
+		await ask("How do I reset my password?");
+		await expect(ask("How do I reset my password?")).resolves.toBeDefined();
+		expect(calls()).toBe(2);
+	});
+
+	it("should return null from get in shadow mode, and flag bypasses", async () => {
+		const { ask, cache, events } = await shadowed();
+		await ask("How do I reset my password?");
+
+		expect(await cache.get(request("How do I reset my password?"))).toBeNull();
+		await cache.wrap(async () => 1, {
+			key: request("x", {
+				messages: [{ role: "assistant", content: "Sure," }],
+			}),
+		});
+		expect(events.at(-1)).toMatchObject({ result: "bypass", shadow: true });
 	});
 });
 

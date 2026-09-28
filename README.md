@@ -127,6 +127,23 @@ const chat = withCache(openai, cache, { namespace: tenantId, semantic: false });
 
 Exact-only entries are stored without an embedding, which needs the schema from `migrate()` in 0.4 or later.
 
+## Trying it on live traffic: shadow mode
+
+With `shadow: true`, the cache looks up every request but never serves the result: the model is always called and your users always get its answer. Each lookup event is flagged `shadow`, misses are still stored (so the cache is warm when you turn shadow off), and `onShadow` receives every hit that *would* have been served next to the fresh answer, so you can check them before trusting the cache.
+
+```ts
+const cache = createCache({
+  pool,
+  embed,
+  shadow: true,
+  onShadow: ({ result, similarity, cached, fresh, namespace }) => {
+    reviewQueue.push({ namespace, result, similarity, cached, fresh }); // or an LLM judge, or a sample for humans
+  },
+});
+```
+
+Shadow mode works on every path (`wrap`, `create` with or without streaming, the SDK `.stream()` helpers) and can also be set per call. `onShadow` is the only hook that receives response content, so treat it like the cache table itself when it comes to personal data. Shadow lookups are counted in their own metric and never as tokens saved.
+
 ## Benchmark
 
 1000 question pairs from [Quora Question Pairs](https://huggingface.co/datasets/nyu-mll/glue) (validation split, 326 labelled duplicates), run through the library against Postgres 18 + pgvector 0.8.6. Each pair's first question is stored, then the second one is looked up. **Hit rate** is the share of duplicate pairs answered from the cache; **false-hit rate** is the share of served answers whose pair is labelled *not* a duplicate.
@@ -162,7 +179,9 @@ Reproduce with `pnpm bench` (needs Docker and `OPENAI_API_KEY`; embeddings are c
 | `embedTimeoutMs` | `5000` | For the embedding call, which is then aborted |
 | `awaitStore` | `false` | Wait for the write on a miss; otherwise call `cache.flush()` before shutdown |
 | `onError` | `console.warn` | `(error, stage)`, never receives prompt or response text |
-| `onLookup` | none | `({ result, namespace, similarity })` for each lookup |
+| `onLookup` | none | `({ result, namespace, similarity, shadow })` for each lookup |
+| `shadow` | `false` | Look up but never serve; also per call (see above) |
+| `onShadow` | none | `({ result, similarity, cached, fresh })` for each hit shadow mode would have served. **Receives response content** |
 
 ## Metrics
 
@@ -180,6 +199,7 @@ const cache = createCache({ pool, embed, ...prometheusHooks({ client, pool }) })
 | `llm_cache_lookup_duration_seconds` | histogram | `stage`: exact, embed, semantic |
 | `llm_cache_similarity` | histogram | none; best score of each semantic lookup |
 | `llm_cache_errors_total` | counter | `stage` |
+| `llm_cache_shadow_lookups_total` | counter | `result`, and `namespace` if enabled; shadow mode only |
 | `llm_cache_entries` | gauge | `table`; from Postgres statistics, only when `pool` is given |
 
 A Grafana dashboard is in [grafana/dashboard.json](grafana/dashboard.json). To see it with live traffic, no API key needed:

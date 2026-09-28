@@ -127,6 +127,23 @@ const chat = withCache(openai, cache, { namespace: tenantId, semantic: false });
 
 Entradas só exatas são gravadas sem embedding, o que exige o schema do `migrate()` da 0.4 ou mais nova.
 
+## Testando no tráfego real: modo sombra
+
+Com `shadow: true`, o cache consulta toda requisição, mas nunca serve o resultado: o modelo é sempre chamado, e o usuário sempre recebe a resposta dele. Cada evento de busca sai marcado com `shadow`, os misses continuam sendo gravados (então o cache já está aquecido quando você desliga a sombra), e o `onShadow` recebe cada hit que *teria* sido servido, ao lado da resposta nova, para você conferir antes de confiar no cache.
+
+```ts
+const cache = createCache({
+  pool,
+  embed,
+  shadow: true,
+  onShadow: ({ result, similarity, cached, fresh, namespace }) => {
+    reviewQueue.push({ namespace, result, similarity, cached, fresh }); // ou um LLM juiz, ou uma amostra para pessoas
+  },
+});
+```
+
+O modo sombra vale em todos os caminhos (`wrap`, `create` com ou sem stream, os helpers `.stream()` dos SDKs) e também pode ser definido por chamada. O `onShadow` é o único hook que recebe o conteúdo das respostas, então trate-o como a própria tabela do cache no que diz respeito a dados pessoais. As buscas em sombra são contadas numa métrica própria e nunca como tokens economizados.
+
 ## Benchmark
 
 1000 pares de perguntas do [Quora Question Pairs](https://huggingface.co/datasets/nyu-mll/glue) (split de validação, 326 rotulados como duplicatas), rodados pela própria biblioteca contra Postgres 18 + pgvector 0.8.6. A primeira pergunta de cada par é gravada, depois a segunda é consultada. **Taxa de hit** é a fração dos pares duplicados respondidos pelo cache; **taxa de falso hit** é a fração das respostas servidas cujo par está rotulado como *não* duplicado.
@@ -162,7 +179,9 @@ Reproduza com `pnpm bench` (precisa de Docker e `OPENAI_API_KEY`; os embeddings 
 | `embedTimeoutMs` | `5000` | Para a chamada de embedding, que é abortada depois disso |
 | `awaitStore` | `false` | Esperar a gravação num miss; se não, chame `cache.flush()` antes de desligar |
 | `onError` | `console.warn` | `(error, stage)`, nunca recebe o texto do prompt nem da resposta |
-| `onLookup` | nenhum | `({ result, namespace, similarity })` a cada busca |
+| `onLookup` | nenhum | `({ result, namespace, similarity, shadow })` a cada busca |
+| `shadow` | `false` | Consulta, mas nunca serve; também por chamada (veja acima) |
+| `onShadow` | nenhum | `({ result, similarity, cached, fresh })` para cada hit que o modo sombra teria servido. **Recebe o conteúdo das respostas** |
 
 ## Métricas
 
@@ -180,6 +199,7 @@ const cache = createCache({ pool, embed, ...prometheusHooks({ client, pool }) })
 | `llm_cache_lookup_duration_seconds` | histogram | `stage`: exact, embed, semantic |
 | `llm_cache_similarity` | histogram | nenhum; melhor nota de cada busca semântica |
 | `llm_cache_errors_total` | counter | `stage` |
+| `llm_cache_shadow_lookups_total` | counter | `result`, e `namespace` se ligado; só no modo sombra |
 | `llm_cache_entries` | gauge | `table`; vem das estatísticas do Postgres, só quando `pool` é passado |
 
 Um dashboard do Grafana está em [grafana/dashboard.json](grafana/dashboard.json). Para vê-lo com tráfego ao vivo, sem chave de API:

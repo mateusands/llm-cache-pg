@@ -124,6 +124,49 @@ describe("prometheusHooks", () => {
 		).toBeDefined();
 	});
 
+	it("should count shadow lookups apart and never as savings", async () => {
+		const { cache, value } = await setup();
+		const shadowAsk = (text: string) =>
+			cache.wrap(async () => ({ a: text }), {
+				key: key(text),
+				shadow: true,
+				usage: () => ({ input: 100, output: 40 }),
+			});
+
+		await shadowAsk("reset password");
+		await shadowAsk("reset password");
+
+		expect(
+			await value("llm_cache_shadow_lookups_total", { result: "miss" }),
+		).toBe(1);
+		expect(
+			await value("llm_cache_shadow_lookups_total", { result: "exact_hit" }),
+		).toBe(1);
+		expect(
+			await value("llm_cache_requests_total", { result: "miss" }),
+		).toBeUndefined();
+		expect(
+			await value("llm_cache_tokens_saved_total", { direction: "in" }),
+		).toBeUndefined();
+	});
+
+	it("should label shadow lookups by namespace when asked", async () => {
+		const { cache, value } = await setup({ namespaceLabel: true });
+
+		await cache.wrap(async () => 1, {
+			key: key("reset password"),
+			namespace: "tenant-1",
+			shadow: true,
+		});
+
+		expect(
+			await value("llm_cache_shadow_lookups_total", {
+				namespace: "tenant-1",
+				result: "miss",
+			}),
+		).toBe(1);
+	});
+
 	it("should count errors by stage", async () => {
 		const registry = new Registry();
 		const hooks = prometheusHooks({ client, registry });

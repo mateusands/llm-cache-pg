@@ -9,7 +9,11 @@ import { MessageStream } from "@anthropic-ai/sdk/lib/MessageStream";
 import type { RawMessageStreamEvent } from "@anthropic-ai/sdk/resources/messages";
 import { describe, expect, it, vi } from "vitest";
 import { withCache } from "../../src/anthropic.ts";
-import { createCache } from "../../src/cache.ts";
+import {
+	type CacheOptions,
+	createCache,
+	type ShadowEvent,
+} from "../../src/cache.ts";
 import { migrate } from "../../src/migrate.ts";
 import { testPool, uniqueTable } from "./db.ts";
 
@@ -146,6 +150,7 @@ function sdkStream(
 async function setup(
 	make: (signal?: AbortSignal) => Stream<RawMessageStreamEvent> = (signal) =>
 		sdkStream(events(), undefined, signal),
+	cacheOptions: Partial<CacheOptions> = {},
 ) {
 	const streams: Stream<RawMessageStreamEvent>[] = [];
 	// Shaped like the SDK's APIPromise, which MessageStream calls withResponse() on.
@@ -160,8 +165,20 @@ async function setup(
 	const client = { messages: { create } } as unknown as Anthropic;
 	const table = uniqueTable();
 	await migrate(pool, { table, dimensions: 3 });
-	const cache = createCache({ pool, table, embed: async () => [1, 0, 0] });
-	return { create, streams, cache, table, ai: withCache(client, cache) };
+	const cache = createCache({
+		pool,
+		table,
+		embed: async () => [1, 0, 0],
+		...cacheOptions,
+	});
+	return {
+		create,
+		streams,
+		cache,
+		table,
+		client,
+		ai: withCache(client, cache),
+	};
 }
 
 const body = {
@@ -411,6 +428,58 @@ describe("withCache for Anthropic, streaming", () => {
 			await drain(await ai.messages.create(body));
 
 			expect(create).toHaveBeenCalledTimes(2);
+		});
+	});
+
+	describe("shadow mode", () => {
+		it("should stream from the model and report the cached answer once the stream ends", async () => {
+			const shadows: ShadowEvent[] = [];
+			const { ai, cache, create, client } = await setup(undefined, {
+				onShadow: (e) => shadows.push(e),
+			});
+			await drain(await ai.messages.create(body));
+			await cache.flush();
+
+			const shadowAi = withCache(client, cache, { shadow: true });
+			const stream = await shadowAi.messages.create(body);
+			expect(shadows).toEqual([]);
+			await drain(stream);
+
+			expect(create).toHaveBeenCalledTimes(2);
+			expect(shadows).toHaveLength(1);
+			expect(shadows[0]).toMatchObject({ result: "exact_hit", similarity: 1 });
+		});
+
+		it("should not report a shadow hit for an aborted stream", async () => {
+			const shadows: ShadowEvent[] = [];
+			const { ai, cache, client } = await setup(undefined, {
+				onShadow: (e) => shadows.push(e),
+			});
+			await drain(await ai.messages.create(body));
+			await cache.flush();
+
+			const stream = await withCache(client, cache, {
+				shadow: true,
+			}).messages.create(body);
+			for await (const _ of stream) stream.controller.abort();
+
+			expect(shadows).toEqual([]);
+		});
+
+		it("should run the stream() helper against the model in shadow mode", async () => {
+			const shadows: ShadowEvent[] = [];
+			const { ai, cache, create, client } = await setup(undefined, {
+				onShadow: (e) => shadows.push(e),
+			});
+			await drain(await ai.messages.create(body));
+			await cache.flush();
+
+			await withCache(client, cache, { shadow: true })
+				.messages.stream((({ stream: _, ...rest }) => rest)(body))
+				.finalMessage();
+
+			expect(create).toHaveBeenCalledTimes(2);
+			expect(shadows).toHaveLength(1);
 		});
 	});
 });

@@ -6,6 +6,7 @@ All notable changes to this project. The format follows [Keep a Changelog](https
 
 ### Added
 
+- Shadow mode (`shadow: true` on the cache or per call): every request is looked up but the model is always called; `onShadow` receives each hit that would have been served next to the fresh answer. Misses are still stored. Counted in `llm_cache_shadow_lookups_total`, never as tokens saved.
 - `cache.stats()`: exact entry counts, expired entries, hits, table and index size, and the top namespaces and models. The CLI's `stats` uses it.
 
 ## [0.5.0] - 2026-09-28
