@@ -230,10 +230,13 @@ function withText(
 
 describe("expiry", () => {
 	it("should not answer from an expired entry, and cache the fresh answer again", async () => {
-		const { ask, calls, events } = await migrated({ ttl: 50 });
+		const { ask, calls, events, table } = await migrated({ ttl: "1h" });
 
 		await ask("How do I reset my password?");
-		await new Promise((r) => setTimeout(r, 80));
+		// Expired by hand: a short real TTL also expired the refreshed entry on a slow CI runner.
+		await pool.query(
+			`UPDATE ${table} SET expires_at = now() - interval '1 second'`,
+		);
 		await ask("How do I reset my password?");
 		await ask("How do I reset my password?");
 
