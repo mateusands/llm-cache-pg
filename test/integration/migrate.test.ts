@@ -1,0 +1,87 @@
+/*
+ * Contract: migrate() is idempotent, safe to run from several processes at once, and refuses to
+ * run against an existing table whose vector size differs from the one configured.
+ */
+import pg from "pg";
+import { describe, expect, it, onTestFinished } from "vitest";
+import { migrate } from "../../src/migrate.ts";
+import { testPool, uniqueTable } from "./db.ts";
+
+const pool = testPool();
+
+async function indexesOf(table: string): Promise<string[]> {
+	const { rows } = await pool.query<{ indexname: string }>(
+		"SELECT indexname FROM pg_indexes WHERE tablename = $1 ORDER BY indexname",
+		[table],
+	);
+	return rows.map((r) => r.indexname);
+}
+
+describe("migrate", () => {
+	it("should create the table, its indexes and record the version on an empty database", async () => {
+		const table = uniqueTable();
+		const result = await migrate(pool, { table });
+
+		expect(await indexesOf(table)).toEqual(
+			[
+				`${table}_embedding_idx`,
+				`${table}_expires_idx`,
+				`${table}_key_uidx`,
+				`${table}_partition_idx`,
+				`${table}_pkey`,
+			].sort(),
+		);
+		const { rows } = await pool.query(
+			`SELECT version FROM ${table}_migrations`,
+		);
+		expect(rows).toEqual([{ version: 1 }]);
+		expect(result.pgvectorVersion).toBe("0.8.6");
+		expect(result.warnings).toEqual([]);
+	});
+
+	it("should be a no-op when run again", async () => {
+		const table = uniqueTable();
+		await migrate(pool, { table });
+		await pool.query(
+			`INSERT INTO ${table} (namespace, model, key_version, params_hash, prompt_hash, prompt_text, embedding, response)
+			 VALUES ('n', 'm', 1, 'p', 'h', 't', $1, '{}')`,
+			[`[${new Array(1536).fill(0.1).join(",")}]`],
+		);
+
+		await migrate(pool, { table });
+
+		const { rows } = await pool.query(
+			`SELECT count(*)::int AS n FROM ${table}`,
+		);
+		expect(rows[0].n).toBe(1);
+	});
+
+	it("should succeed when several processes migrate at the same time", async () => {
+		const table = uniqueTable();
+		const runs = Array.from({ length: 5 }, () => migrate(pool, { table }));
+		await expect(Promise.all(runs)).resolves.toHaveLength(5);
+	});
+
+	it("should succeed when different tables are migrated at once on a database without pgvector", async () => {
+		const database = uniqueTable();
+		await pool.query(`CREATE DATABASE ${database}`);
+		const url = new URL(pool.options.connectionString ?? "");
+		url.pathname = `/${database}`;
+		const fresh = new pg.Pool({ connectionString: url.toString(), max: 5 });
+		onTestFinished(() => fresh.end());
+
+		const runs = Array.from({ length: 5 }, () =>
+			migrate(fresh, { table: uniqueTable() }),
+		);
+
+		await expect(Promise.all(runs)).resolves.toHaveLength(5);
+	});
+
+	it("should fail when the table already exists with a different vector size", async () => {
+		const table = uniqueTable();
+		await migrate(pool, { table, dimensions: 3 });
+		await expect(migrate(pool, { table, dimensions: 4 })).rejects.toThrow(
+			/3 dimensions.*4/,
+		);
+	});
+});
