@@ -129,7 +129,7 @@ Entradas só exatas são gravadas sem embedding, o que exige o schema do `migrat
 
 ## Testando no tráfego real: modo sombra
 
-Com `shadow: true`, o cache consulta toda requisição, mas nunca serve o resultado: o modelo é sempre chamado, e o usuário sempre recebe a resposta dele. Cada evento de busca sai marcado com `shadow`, os misses continuam sendo gravados (então o cache já está aquecido quando você desliga a sombra), e o `onShadow` recebe cada hit que *teria* sido servido, ao lado da resposta nova, para você conferir antes de confiar no cache.
+Com `shadow: true`, o cache consulta toda requisição, mas nunca serve o resultado: o modelo é sempre chamado, e o usuário sempre recebe a resposta dele. Cada evento de busca sai marcado com `shadow`, os misses continuam sendo gravados (então o cache já está aquecido quando você desliga a sombra), e o `onShadow` recebe cada hit que *teria* sido servido, ao lado da resposta nova, para você conferir antes de confiar no cache. Ele só é chamado quando a resposta nova também poderia ser gravada: não numa chamada de tool nem num stream interrompido.
 
 ```ts
 const cache = createCache({

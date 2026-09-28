@@ -584,7 +584,7 @@ describe("shadow mode", () => {
 	});
 
 	it("should apply shadow per call, in both directions", async () => {
-		const { cache, calls, ask } = await migrated();
+		const { cache, ask } = await migrated();
 		await ask("How do I reset my password?");
 		const fn = vi.fn(async () => ({ answer: "fresh" }));
 
@@ -602,7 +602,7 @@ describe("shadow mode", () => {
 			shadow: false,
 		});
 		expect(served).not.toHaveBeenCalled();
-		expect(calls()).toBe(1);
+		expect(shadowCache.calls()).toBe(1);
 	});
 
 	it("should not report a shadow hit for an answer that would not be stored", async () => {

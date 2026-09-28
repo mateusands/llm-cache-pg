@@ -137,12 +137,12 @@ export interface Cache {
 	 * lookup's embedding. For responses that only exist later, such as streams.
 	 */
 	lookup<R>(key: KeyInput, options?: CallOptions): Promise<LookupHandle<R>>;
-	/** Looks up without calling anything. Null on a miss, a bypass or an internal failure. */
+	/** Looks up without calling anything. Null on a miss, a bypass, an internal failure or in shadow mode. */
 	get<R>(
 		key: KeyInput,
 		options?: CallOptions,
 	): Promise<CachedResponse<R> | null>;
-	/** Stores `response` for `key`. Resolves even if the write fails; the failure goes to onError. */
+	/** Stores `response` for `key`, shadow mode or not. Resolves even if the write fails; the failure goes to onError. */
 	set<R>(
 		key: KeyInput,
 		response: R,

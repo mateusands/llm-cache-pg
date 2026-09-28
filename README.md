@@ -129,7 +129,7 @@ Exact-only entries are stored without an embedding, which needs the schema from 
 
 ## Trying it on live traffic: shadow mode
 
-With `shadow: true`, the cache looks up every request but never serves the result: the model is always called and your users always get its answer. Each lookup event is flagged `shadow`, misses are still stored (so the cache is warm when you turn shadow off), and `onShadow` receives every hit that *would* have been served next to the fresh answer, so you can check them before trusting the cache.
+With `shadow: true`, the cache looks up every request but never serves the result: the model is always called and your users always get its answer. Each lookup event is flagged `shadow`, misses are still stored (so the cache is warm when you turn shadow off), and `onShadow` receives each hit that *would* have been served next to the fresh answer, so you can check them before trusting the cache. It is only called when the fresh answer could itself be stored: not for a tool call or a stream that was cut short.
 
 ```ts
 const cache = createCache({
