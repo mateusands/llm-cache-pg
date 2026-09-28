@@ -107,6 +107,17 @@ Measured with `text-embedding-3-small` (cosine similarity):
 
 A look-alike question with a different answer can score higher than a real paraphrase, so no threshold catches loose rewording without also serving wrong answers. The default of 0.92 only accepts close rewording. Lower it only after measuring on your own traffic.
 
+Both the threshold and semantic lookups can be set per call, so each tenant or route gets its own:
+
+```ts
+// A narrow FAQ bot that you have measured:
+const faq = withCache(openai, cache, { namespace: "faq", threshold: 0.88 });
+// Open-ended questions: exact repeats only. No embedding calls, no false hits.
+const chat = withCache(openai, cache, { namespace: tenantId, semantic: false });
+```
+
+Exact-only entries are stored without an embedding, which needs the schema from `migrate()` in 0.4 or later.
+
 ## Benchmark
 
 1000 question pairs from [Quora Question Pairs](https://huggingface.co/datasets/nyu-mll/glue) (validation split, 326 labelled duplicates), run through the library against Postgres 18 + pgvector 0.8.6. Each pair's first question is stored, then the second one is looked up. **Hit rate** is the share of duplicate pairs answered from the cache; **false-hit rate** is the share of served answers whose pair is labelled *not* a duplicate.
@@ -134,7 +145,8 @@ Reproduce with `pnpm bench` (needs Docker and `OPENAI_API_KEY`; embeddings are c
 | --- | --- | --- |
 | `pool` | required | A `pg.Pool`, or anything with `query` and `connect` |
 | `embed` | required | `(text, { signal }) => Promise<number[]>` |
-| `threshold` | `0.92` | Cosine similarity for a semantic hit |
+| `threshold` | `0.92` | Cosine similarity for a semantic hit; also per call |
+| `semantic` | `true` | `false` for exact matches only, with no embedding calls; also per call |
 | `ttl` | none | `"30s"`, `"15m"`, `"7d"`, ms, or `null` |
 | `table` | `llm_cache_entries` | Must match `migrate()` |
 | `lookupTimeoutMs` | `200` | Per database lookup, enforced on client and server |

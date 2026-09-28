@@ -4,6 +4,15 @@ All notable changes to this project. The format follows [Keep a Changelog](https
 
 ## [Unreleased]
 
+### Added
+
+- `threshold` and `semantic` per call, and `semantic` on the cache. With `semantic: false` only exact matches are served and no embedding is computed.
+- Schema v2: `embedding` is optional, for exact-only entries. `migrate()` upgrades v1 tables in place without locking out readers.
+
+### Fixed
+
+- The OpenAI and Anthropic wrappers could store an answer with no choices or no content blocks.
+
 ## [0.3.0] - 2026-09-28
 
 First release on npm.

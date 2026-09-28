@@ -54,6 +54,8 @@ export interface CacheOptions {
 	embed: Embedder;
 	/** Cosine similarity needed for a semantic hit, in (0, 1]. Default 0.92. */
 	threshold?: number;
+	/** False for exact matches only: no embedding calls and no false hits. Default true. */
+	semantic?: boolean;
 	/** How long entries live. Default: no expiry. */
 	ttl?: Ttl;
 	/** Must match the table given to migrate(). Default `llm_cache_entries`. */
@@ -75,6 +77,10 @@ export interface CallOptions {
 	namespace?: string;
 	/** Overrides the cache-wide ttl for entries this call writes. */
 	ttl?: Ttl;
+	/** Overrides the cache-wide threshold for this call. */
+	threshold?: number;
+	/** Overrides the cache-wide `semantic` setting for this call. */
+	semantic?: boolean;
 }
 
 export interface Usage {
@@ -130,6 +136,12 @@ export interface InvalidateFilter {
 // Writes run in the background and can wait on HNSW index maintenance.
 const WRITE_TIMEOUT_MS = 5000;
 
+function validThreshold(threshold: number): number {
+	if (!(threshold > 0 && threshold <= 1))
+		throw new Error(`Invalid threshold ${threshold}: must be in (0, 1]`);
+	return threshold;
+}
+
 function positiveInteger(name: string, value: number): number {
 	if (!Number.isInteger(value) || value <= 0)
 		throw new Error(`Invalid ${name} ${value}: must be a positive integer`);
@@ -139,20 +151,25 @@ function positiveInteger(name: string, value: number): number {
 interface Setup {
 	config: StoreConfig;
 	dimensions: number;
+	embeddingOptional: boolean;
 }
 
 interface Lookup<R> {
 	hit: CachedResponse<R> | null;
-	/** Both set when the entry can be stored after the model answers. */
-	embedding?: number[];
+	/** Both set when the entry can be stored after the model answers; null means no embedding. */
+	embedding?: number[] | null;
 	setup?: Setup;
+}
+
+interface Mode {
+	threshold: number;
+	semantic: boolean;
 }
 
 export function createCache(options: CacheOptions): Cache {
 	const { pool, embed } = options;
-	const threshold = options.threshold ?? 0.92;
-	if (!(threshold > 0 && threshold <= 1))
-		throw new Error(`Invalid threshold ${threshold}: must be in (0, 1]`);
+	const threshold = validThreshold(options.threshold ?? 0.92);
+	const semantic = options.semantic ?? true;
 	const defaultTtlMs = parseTtl(options.ttl);
 	const { table } = resolveMigrationOptions({
 		...(options.table !== undefined ? { table: options.table } : {}),
@@ -201,6 +218,7 @@ export function createCache(options: CacheOptions): Cache {
 		).then(
 			(info) => ({
 				dimensions: info.dimensions,
+				embeddingOptional: info.embeddingOptional,
 				config: {
 					table,
 					iterativeScan: supportsIterativeScan(info.pgvectorVersion),
@@ -248,6 +266,33 @@ export function createCache(options: CacheOptions): Cache {
 		}
 	}
 
+	function resolveMode(call: CallOptions | undefined): Mode {
+		return {
+			threshold:
+				call?.threshold === undefined
+					? threshold
+					: validThreshold(call.threshold),
+			semantic: call?.semantic ?? semantic,
+		};
+	}
+
+	let warnedMissingV2 = false;
+
+	/** Whether an entry without an embedding can be stored; warns once on a table that can't. */
+	function canStoreWithoutEmbedding(s: Setup): boolean {
+		if (s.embeddingOptional) return true;
+		if (!warnedMissingV2) {
+			warnedMissingV2 = true;
+			report(
+				new Error(
+					`Table ${table} requires embeddings; run migrate() to store entries with semantic off`,
+				),
+				"setup",
+			);
+		}
+		return false;
+	}
+
 	function resolveNamespace(namespace: string | undefined): string {
 		const ns = namespace ?? "default";
 		if (typeof ns !== "string" || ns.length === 0)
@@ -275,6 +320,7 @@ export function createCache(options: CacheOptions): Cache {
 	async function lookup<R>(
 		key: CacheKey,
 		namespace: string,
+		mode: Mode,
 	): Promise<Lookup<R>> {
 		const durations: Durations = {};
 		const miss = (similarity?: number) =>
@@ -331,6 +377,13 @@ export function createCache(options: CacheOptions): Cache {
 			return { hit: null };
 		}
 
+		if (!mode.semantic) {
+			miss();
+			return canStoreWithoutEmbedding(s)
+				? { hit: null, embedding: null, setup: s }
+				: { hit: null };
+		}
+
 		let embedding: number[];
 		try {
 			embedding = await timed("embed", () => embedText(key.text, s.dimensions));
@@ -348,7 +401,7 @@ export function createCache(options: CacheOptions): Cache {
 		} catch (error) {
 			report(error, "semantic");
 		}
-		if (nearest && nearest.similarity >= threshold)
+		if (nearest && nearest.similarity >= mode.threshold)
 			return hit(nearest, "semantic_hit", s);
 		miss(nearest?.similarity);
 		return { hit: null, embedding, setup: s };
@@ -358,7 +411,7 @@ export function createCache(options: CacheOptions): Cache {
 		s: Setup,
 		namespace: string,
 		key: CacheKey,
-		embedding: number[],
+		embedding: number[] | null,
 		response: unknown,
 		ttl: Ttl | undefined,
 		usage: Usage | undefined,
@@ -384,6 +437,7 @@ export function createCache(options: CacheOptions): Cache {
 			wrapOptions: WrapOptions<R>,
 		): Promise<R> {
 			const namespace = resolveNamespace(wrapOptions.namespace);
+			const mode = resolveMode(wrapOptions);
 			if (wrapOptions.ttl !== undefined) parseTtl(wrapOptions.ttl);
 			const key = deriveKey(wrapOptions.key);
 			if (!key) {
@@ -391,13 +445,13 @@ export function createCache(options: CacheOptions): Cache {
 				return fn();
 			}
 
-			const found = await lookup<R>(key, namespace);
+			const found = await lookup<R>(key, namespace, mode);
 			if (found.hit) return found.hit.response;
 
 			const response = await fn();
 			if (
 				found.setup &&
-				found.embedding &&
+				found.embedding !== undefined &&
 				(wrapOptions.shouldStore?.(response) ?? true)
 			) {
 				const write = store(
@@ -425,7 +479,7 @@ export function createCache(options: CacheOptions): Cache {
 				emit({ result: "bypass", namespace, durations: {} });
 				return null;
 			}
-			return (await lookup<R>(key, namespace)).hit;
+			return (await lookup<R>(key, namespace, resolveMode(callOptions))).hit;
 		},
 
 		async set<R>(
@@ -438,7 +492,12 @@ export function createCache(options: CacheOptions): Cache {
 			if (!key) return;
 			try {
 				const s = await ensureSetup();
-				const embedding = await embedText(key.text, s.dimensions);
+				let embedding: number[] | null = null;
+				if (resolveMode(callOptions).semantic) {
+					embedding = await embedText(key.text, s.dimensions);
+				} else if (!canStoreWithoutEmbedding(s)) {
+					return;
+				}
 				await store(
 					s,
 					namespace,

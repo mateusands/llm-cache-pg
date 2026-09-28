@@ -107,6 +107,17 @@ Medido com `text-embedding-3-small` (similaridade de cosseno):
 
 Uma pergunta parecida, mas com outra resposta, pode ter nota maior que uma paráfrase de verdade. Por isso nenhum threshold pega reformulações soltas sem também servir respostas erradas. O default de 0,92 só aceita reformulações próximas. Baixe esse valor só depois de medir com o seu próprio tráfego.
 
+O threshold e a busca semântica podem ser definidos por chamada, então cada tenant ou rota tem o seu:
+
+```ts
+// Um bot de FAQ estreito, que você já mediu:
+const faq = withCache(openai, cache, { namespace: "faq", threshold: 0.88 });
+// Perguntas abertas: só repetições exatas. Sem chamadas de embedding, sem falso hit.
+const chat = withCache(openai, cache, { namespace: tenantId, semantic: false });
+```
+
+Entradas só exatas são gravadas sem embedding, o que exige o schema do `migrate()` da 0.4 ou mais nova.
+
 ## Benchmark
 
 1000 pares de perguntas do [Quora Question Pairs](https://huggingface.co/datasets/nyu-mll/glue) (split de validação, 326 rotulados como duplicatas), rodados pela própria biblioteca contra Postgres 18 + pgvector 0.8.6. A primeira pergunta de cada par é gravada, depois a segunda é consultada. **Taxa de hit** é a fração dos pares duplicados respondidos pelo cache; **taxa de falso hit** é a fração das respostas servidas cujo par está rotulado como *não* duplicado.
@@ -134,7 +145,8 @@ Reproduza com `pnpm bench` (precisa de Docker e `OPENAI_API_KEY`; os embeddings 
 | --- | --- | --- |
 | `pool` | obrigatório | Um `pg.Pool`, ou qualquer coisa com `query` e `connect` |
 | `embed` | obrigatório | `(text, { signal }) => Promise<number[]>` |
-| `threshold` | `0.92` | Similaridade de cosseno para um hit semântico |
+| `threshold` | `0.92` | Similaridade de cosseno para um hit semântico; também por chamada |
+| `semantic` | `true` | `false` para só hits exatos, sem chamadas de embedding; também por chamada |
 | `ttl` | nenhum | `"30s"`, `"15m"`, `"7d"`, ms ou `null` |
 | `table` | `llm_cache_entries` | Precisa ser a mesma do `migrate()` |
 | `lookupTimeoutMs` | `200` | Por consulta ao banco, aplicado no client e no servidor |
