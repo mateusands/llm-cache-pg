@@ -202,6 +202,7 @@ await cache.prune();                              // delete expired entries, in 
 await cache.invalidate({ namespace: tenantId });  // everything for one tenant
 await cache.invalidate({ model: "gpt-4.1-mini" }); // after a model upgrade
 await cache.invalidate({ key: { model, messages }, namespace: tenantId }); // one bad answer
+await cache.stats();                              // entries, expired, hits, size, top namespaces and models
 ```
 
 Run `prune()` on a schedule when you use a TTL; expired entries are never served, but they stay in the table until then. Both calls throw on failure, unlike lookups. After deleting many rows, a `VACUUM` lets Postgres reuse the space in the HNSW index.

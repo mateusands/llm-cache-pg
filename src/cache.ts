@@ -14,6 +14,8 @@ import {
 	type Match,
 	recordHit,
 	type StoreConfig,
+	type TableStats,
+	tableStats,
 } from "./store.ts";
 import { parseTtl, type Ttl } from "./ttl.ts";
 
@@ -130,6 +132,13 @@ export interface Cache {
 	 * request, in `namespace` (default `default`). Throws without a filter or on failure.
 	 */
 	invalidate(filter: InvalidateFilter): Promise<number>;
+	/** Exact counts, sizes and versions for the table (count(*), so slow on very large tables). Throws on failure. */
+	stats(): Promise<CacheStats>;
+}
+
+export interface CacheStats extends TableStats {
+	table: string;
+	pgvectorVersion: string;
 }
 
 export interface LookupHandle<R> {
@@ -594,6 +603,16 @@ export function createCache(options: CacheOptions): Cache {
 				...(filter.model !== undefined ? { model: filter.model } : {}),
 				...(key ? { key } : {}),
 			});
+		},
+
+		async stats(): Promise<CacheStats> {
+			// First, so a missing table gets the "run migrate()" message rather than a SQL error.
+			const info = await inspectTable(pool, table);
+			return {
+				table,
+				pgvectorVersion: info.pgvectorVersion,
+				...(await tableStats(pool, table)),
+			};
 		},
 	};
 }

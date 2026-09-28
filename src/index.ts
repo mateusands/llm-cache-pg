@@ -2,6 +2,7 @@ export type {
 	Cache,
 	CachedResponse,
 	CacheOptions,
+	CacheStats,
 	CallOptions,
 	Durations,
 	Embedder,

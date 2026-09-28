@@ -4,6 +4,10 @@ All notable changes to this project. The format follows [Keep a Changelog](https
 
 ## [Unreleased]
 
+### Added
+
+- `cache.stats()`: exact entry counts, expired entries, hits, table and index size, and the top namespaces and models. The CLI's `stats` uses it.
+
 ## [0.5.0] - 2026-09-28
 
 ### Added

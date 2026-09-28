@@ -202,6 +202,7 @@ await cache.prune();                              // apaga entradas expiradas, e
 await cache.invalidate({ namespace: tenantId });  // tudo de um tenant
 await cache.invalidate({ model: "gpt-4.1-mini" }); // depois de trocar de modelo
 await cache.invalidate({ key: { model, messages }, namespace: tenantId }); // uma resposta errada
+await cache.stats();                              // entradas, expiradas, hits, tamanho, principais namespaces e modelos
 ```
 
 Rode o `prune()` periodicamente se usar TTL: entradas expiradas nunca são servidas, mas ficam na tabela até lá. As duas chamadas lançam erro se falharem, ao contrário das buscas. Depois de apagar muitas linhas, um `VACUUM` deixa o Postgres reaproveitar o espaço do índice HNSW.
