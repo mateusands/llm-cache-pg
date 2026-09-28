@@ -1,0 +1,6 @@
+apiVersion: 1
+providers:
+  - name: llm-cache-pg
+    type: file
+    options:
+      path: /var/lib/grafana/dashboards
