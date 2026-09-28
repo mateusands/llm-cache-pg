@@ -153,6 +153,30 @@ describe("withCache for Anthropic", () => {
 				content: [{ type: "tool_use", id: "t", name: "x", input: {} }],
 			}),
 		],
+		[
+			"code execution",
+			message({
+				content: [
+					{
+						type: "server_tool_use",
+						id: "c",
+						name: "code_execution",
+						input: {},
+					},
+					{ type: "text", text: "Done.", citations: null },
+				],
+			}),
+		],
+		[
+			"a container",
+			message({
+				container: {
+					id: "cntr_1",
+					expires_at: "2026-09-28T20:00:00Z",
+					skills: null,
+				},
+			}),
+		],
 		["no content blocks", message({ content: [] })],
 		["a truncated answer", message({ stop_reason: "max_tokens" })],
 		["a refusal", message({ stop_reason: "refusal" })],
@@ -163,6 +187,28 @@ describe("withCache for Anthropic", () => {
 		await ai.messages.create(body);
 
 		expect(create).toHaveBeenCalledTimes(2);
+	});
+
+	it("should store an answer that used web search", async () => {
+		const { ai, create } = await setup(
+			message({
+				content: [
+					{
+						type: "server_tool_use",
+						id: "s",
+						name: "web_search",
+						input: { query: "q" },
+					},
+					{ type: "web_search_tool_result", tool_use_id: "s", content: [] },
+					{ type: "text", text: "Paris.", citations: null },
+				],
+			}),
+		);
+
+		await ai.messages.create(body);
+		await ai.messages.create(body);
+
+		expect(create).toHaveBeenCalledTimes(1);
 	});
 
 	it("should store an answer that ended on a stop sequence", async () => {

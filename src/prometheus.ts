@@ -97,6 +97,17 @@ export function prometheusHooks(options: PrometheusOptions): PrometheusHooks {
 			"Every prometheusHooks() call on one registry must use the same namespaceLabel",
 		);
 	}
+	// Separate from requests_total, so shadow traffic never reads as served or saved.
+	const shadowLookups = metric(
+		"llm_cache_shadow_lookups_total",
+		() =>
+			new client.Counter({
+				name: "llm_cache_shadow_lookups_total",
+				help: "Lookups in shadow mode, by what would have happened. The model was always called.",
+				labelNames: requestLabels,
+				registers,
+			}),
+	);
 	const tokensSaved = metric(
 		"llm_cache_tokens_saved_total",
 		() =>
@@ -182,11 +193,10 @@ export function prometheusHooks(options: PrometheusOptions): PrometheusHooks {
 
 	return {
 		onLookup(event) {
-			requests.inc(
-				options.namespaceLabel
-					? { result: event.result, namespace: event.namespace }
-					: { result: event.result },
-			);
+			const labels = options.namespaceLabel
+				? { result: event.result, namespace: event.namespace }
+				: { result: event.result };
+			(event.shadow ? shadowLookups : requests).inc(labels);
 			for (const [stage, ms] of Object.entries(event.durations)) {
 				duration.observe({ stage }, ms / 1000);
 			}
@@ -196,7 +206,7 @@ export function prometheusHooks(options: PrometheusOptions): PrometheusHooks {
 			) {
 				similarity.observe({}, event.similarity);
 			}
-			if (event.tokens) {
+			if (event.tokens && !event.shadow) {
 				tokensSaved.inc({ direction: "in" }, event.tokens.input ?? 0);
 				tokensSaved.inc({ direction: "out" }, event.tokens.output ?? 0);
 			}

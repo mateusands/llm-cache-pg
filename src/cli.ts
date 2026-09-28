@@ -2,7 +2,7 @@ import { parseArgs } from "node:util";
 import { createCache } from "./cache.ts";
 import { inspectTable, migrate, resolveMigrationOptions } from "./migrate.ts";
 import type { Pool } from "./pg.ts";
-import { countMatching, tableStats } from "./store.ts";
+import { countMatching } from "./store.ts";
 
 const USAGE = `Usage: llm-cache-pg <command> [options]
 
@@ -102,7 +102,6 @@ export async function runCli(argv: string[], io: CliIo = {}): Promise<number> {
 				return 0;
 			}
 
-			const info = await inspectTable(pool, table);
 			// Admin calls never embed; the cache only needs an embedder to exist.
 			const cache = createCache({
 				pool,
@@ -113,17 +112,15 @@ export async function runCli(argv: string[], io: CliIo = {}): Promise<number> {
 			});
 
 			if (command === "stats") {
-				const stats = await tableStats(pool, table);
+				const stats = await cache.stats();
 				if (values.json) {
-					out(
-						`${JSON.stringify({ table, pgvectorVersion: info.pgvectorVersion, ...stats }, null, 2)}\n`,
-					);
+					out(`${JSON.stringify(stats, null, 2)}\n`);
 				} else {
 					const list = (items: { name: string; entries: number }[]) =>
 						items.map((i) => `${i.name} ${i.entries}`).join(", ") || "none";
 					out(
 						[
-							`table        ${table} (schema v${stats.schemaVersion}, pgvector ${info.pgvectorVersion})`,
+							`table        ${table} (schema v${stats.schemaVersion}, pgvector ${stats.pgvectorVersion})`,
 							`entries      ${stats.entries} (${stats.expired} expired, ${stats.withoutEmbedding} without embedding)`,
 							`hits         ${stats.hits}`,
 							`size         ${bytes(stats.totalBytes)} (${bytes(stats.indexBytes)} in indexes)`,
@@ -134,8 +131,11 @@ export async function runCli(argv: string[], io: CliIo = {}): Promise<number> {
 					);
 				}
 			} else if (command === "prune") {
+				// Checked first so a missing table says to migrate instead of failing on SQL.
+				await inspectTable(pool, table);
 				out(`Deleted ${await cache.prune({ batchSize })} expired entries.\n`);
 			} else {
+				await inspectTable(pool, table);
 				const filter = {
 					...(values.namespace === undefined
 						? {}

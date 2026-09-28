@@ -97,7 +97,7 @@ Nos dois wrappers, os resultados voltam como Promises comuns, então `.withRespo
 
 O `create({ stream: true })` e os helpers dos SDKs, `chat.completions.stream()` e `messages.stream()`, também passam pelo cache. Num miss, você recebe o stream do SDK intacto, e a resposta é gravada quando o stream termina normalmente. Num hit, você recebe um `Stream` de verdade do SDK que reproduz a resposta gravada, então `for await`, `tee()` e `toReadableStream()` funcionam como sempre.
 
-- Nada é gravado se o stream for abortado, der erro, for interrompido ou chamar tools. Streams da Anthropic com thinking, redacted thinking ou citações são gravados e reproduzidos bloco a bloco; streams com tools de servidor (web search, execução de código) não são, embora a mesma resposta sem stream seja. Parar de ler com `break` conta como interrompido, inclusive um `break` no chunk final.
+- Nada é gravado se o stream for abortado, der erro, for interrompido ou chamar tools. Streams da Anthropic com thinking, redacted thinking, citações, web search, web fetch ou tool search são gravados e reproduzidos bloco a bloco. Respostas que executaram código nunca são gravadas, com ou sem stream: elas apontam para um container que expira. Resultados de busca envelhecem, então dê um `ttl` a essas rotas. Parar de ler com `break` conta como interrompido, inclusive um `break` no chunk final.
 - Pedidos com e sem stream são cacheados separadamente.
 - A reprodução manda a resposta inteira num único chunk de conteúdo, e não token a token.
 - Numa resposta do cache pelo `messages.stream()` da Anthropic, o `request_id` é nulo e o `withResponse()` do helper lança erro: não existe resposta HTTP por trás.
@@ -126,6 +126,23 @@ const chat = withCache(openai, cache, { namespace: tenantId, semantic: false });
 ```
 
 Entradas só exatas são gravadas sem embedding, o que exige o schema do `migrate()` da 0.4 ou mais nova.
+
+## Testando no tráfego real: modo sombra
+
+Com `shadow: true`, o cache consulta toda requisição, mas nunca serve o resultado: o modelo é sempre chamado, e o usuário sempre recebe a resposta dele. Cada evento de busca sai marcado com `shadow`, os misses continuam sendo gravados (então o cache já está aquecido quando você desliga a sombra), e o `onShadow` recebe cada hit que *teria* sido servido, ao lado da resposta nova, para você conferir antes de confiar no cache. Ele só é chamado quando a resposta nova também poderia ser gravada: não numa chamada de tool nem num stream interrompido.
+
+```ts
+const cache = createCache({
+  pool,
+  embed,
+  shadow: true,
+  onShadow: ({ result, similarity, cached, fresh, namespace }) => {
+    reviewQueue.push({ namespace, result, similarity, cached, fresh }); // ou um LLM juiz, ou uma amostra para pessoas
+  },
+});
+```
+
+O modo sombra vale em todos os caminhos (`wrap`, `create` com ou sem stream, os helpers `.stream()` dos SDKs) e também pode ser definido por chamada. O `onShadow` é o único hook que recebe o conteúdo das respostas, então trate-o como a própria tabela do cache no que diz respeito a dados pessoais. As buscas em sombra são contadas numa métrica própria e nunca como tokens economizados.
 
 ## Benchmark
 
@@ -162,7 +179,9 @@ Reproduza com `pnpm bench` (precisa de Docker e `OPENAI_API_KEY`; os embeddings 
 | `embedTimeoutMs` | `5000` | Para a chamada de embedding, que é abortada depois disso |
 | `awaitStore` | `false` | Esperar a gravação num miss; se não, chame `cache.flush()` antes de desligar |
 | `onError` | `console.warn` | `(error, stage)`, nunca recebe o texto do prompt nem da resposta |
-| `onLookup` | nenhum | `({ result, namespace, similarity })` a cada busca |
+| `onLookup` | nenhum | `({ result, namespace, similarity, shadow })` a cada busca |
+| `shadow` | `false` | Consulta, mas nunca serve; também por chamada (veja acima) |
+| `onShadow` | nenhum | `({ result, similarity, cached, fresh })` para cada hit que o modo sombra teria servido. **Recebe o conteúdo das respostas** |
 
 ## Métricas
 
@@ -180,6 +199,7 @@ const cache = createCache({ pool, embed, ...prometheusHooks({ client, pool }) })
 | `llm_cache_lookup_duration_seconds` | histogram | `stage`: exact, embed, semantic |
 | `llm_cache_similarity` | histogram | nenhum; melhor nota de cada busca semântica |
 | `llm_cache_errors_total` | counter | `stage` |
+| `llm_cache_shadow_lookups_total` | counter | `result`, e `namespace` se ligado; só no modo sombra |
 | `llm_cache_entries` | gauge | `table`; vem das estatísticas do Postgres, só quando `pool` é passado |
 
 Um dashboard do Grafana está em [grafana/dashboard.json](grafana/dashboard.json). Para vê-lo com tráfego ao vivo, sem chave de API:
@@ -202,6 +222,7 @@ await cache.prune();                              // apaga entradas expiradas, e
 await cache.invalidate({ namespace: tenantId });  // tudo de um tenant
 await cache.invalidate({ model: "gpt-4.1-mini" }); // depois de trocar de modelo
 await cache.invalidate({ key: { model, messages }, namespace: tenantId }); // uma resposta errada
+await cache.stats();                              // entradas, expiradas, hits, tamanho, principais namespaces e modelos
 ```
 
 Rode o `prune()` periodicamente se usar TTL: entradas expiradas nunca são servidas, mas ficam na tabela até lá. As duas chamadas lançam erro se falharem, ao contrário das buscas. Depois de apagar muitas linhas, um `VACUUM` deixa o Postgres reaproveitar o espaço do índice HNSW.

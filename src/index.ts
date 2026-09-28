@@ -2,6 +2,7 @@ export type {
 	Cache,
 	CachedResponse,
 	CacheOptions,
+	CacheStats,
 	CallOptions,
 	Durations,
 	Embedder,
@@ -10,6 +11,7 @@ export type {
 	LookupEvent,
 	LookupHandle,
 	LookupResult,
+	ShadowEvent,
 	Usage,
 	WrapOptions,
 } from "./cache.ts";

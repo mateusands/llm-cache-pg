@@ -9,7 +9,11 @@ import { MessageStream } from "@anthropic-ai/sdk/lib/MessageStream";
 import type { RawMessageStreamEvent } from "@anthropic-ai/sdk/resources/messages";
 import { describe, expect, it, vi } from "vitest";
 import { withCache } from "../../src/anthropic.ts";
-import { createCache } from "../../src/cache.ts";
+import {
+	type CacheOptions,
+	createCache,
+	type ShadowEvent,
+} from "../../src/cache.ts";
 import { migrate } from "../../src/migrate.ts";
 import { testPool, uniqueTable } from "./db.ts";
 
@@ -146,6 +150,7 @@ function sdkStream(
 async function setup(
 	make: (signal?: AbortSignal) => Stream<RawMessageStreamEvent> = (signal) =>
 		sdkStream(events(), undefined, signal),
+	cacheOptions: Partial<CacheOptions> = {},
 ) {
 	const streams: Stream<RawMessageStreamEvent>[] = [];
 	// Shaped like the SDK's APIPromise, which MessageStream calls withResponse() on.
@@ -160,8 +165,20 @@ async function setup(
 	const client = { messages: { create } } as unknown as Anthropic;
 	const table = uniqueTable();
 	await migrate(pool, { table, dimensions: 3 });
-	const cache = createCache({ pool, table, embed: async () => [1, 0, 0] });
-	return { create, streams, cache, table, ai: withCache(client, cache) };
+	const cache = createCache({
+		pool,
+		table,
+		embed: async () => [1, 0, 0],
+		...cacheOptions,
+	});
+	return {
+		create,
+		streams,
+		cache,
+		table,
+		client,
+		ai: withCache(client, cache),
+	};
 }
 
 const body = {
@@ -389,8 +406,154 @@ describe("withCache for Anthropic, streaming", () => {
 			expect(replayed.content).toEqual(original.content);
 		});
 
-		it("should still not store a stream with server tool blocks", async () => {
-			const blocks = [
+		it.each([
+			[
+				"web search, with its input split across JSON chunks",
+				[
+					{
+						start: {
+							type: "server_tool_use",
+							id: "s1",
+							name: "web_search",
+							input: {},
+						},
+						deltas: [
+							{ type: "input_json_delta", partial_json: '{"que' },
+							{ type: "input_json_delta", partial_json: 'ry": "capital of ' },
+							{ type: "input_json_delta", partial_json: 'France"}' },
+						],
+					},
+					{
+						start: {
+							type: "web_search_tool_result",
+							tool_use_id: "s1",
+							content: [
+								{
+									type: "web_search_result",
+									title: "France",
+									url: "https://example.org/fr",
+									encrypted_content: "e",
+									page_age: null,
+								},
+							],
+						},
+						deltas: [],
+					},
+					{
+						start: { type: "text", text: "", citations: null },
+						deltas: [
+							{ type: "text_delta", text: "Paris." },
+							{
+								type: "citations_delta",
+								citation: {
+									type: "web_search_result_location",
+									cited_text: "Paris",
+									url: "https://example.org/fr",
+									title: "France",
+									encrypted_index: "i",
+								},
+							},
+						],
+					},
+				],
+			],
+			// The SDK reads an empty input buffer as {}, so a tool call with no input deltas is complete.
+			[
+				"a server tool call with no input deltas",
+				[
+					{
+						start: {
+							type: "server_tool_use",
+							id: "s2",
+							name: "web_fetch",
+							input: {},
+						},
+						deltas: [],
+					},
+					TEXT,
+				],
+			],
+		])("should store and replay %s", async (_, blocks) => {
+			const { ai, cache, create } = await setup(() =>
+				sdkStream(streamOf(blocks)),
+			);
+			const original = await finalMessage(sdkStream(streamOf(blocks)));
+
+			await drain(await ai.messages.create(body));
+			await cache.flush();
+			const replayed = await finalMessage(await ai.messages.create(body));
+
+			expect(create).toHaveBeenCalledTimes(1);
+			expect(replayed.content).toEqual(original.content);
+		});
+
+		it.each([
+			[
+				"code execution",
+				[
+					{
+						start: {
+							type: "server_tool_use",
+							id: "c",
+							name: "code_execution",
+							input: {},
+						},
+						deltas: [],
+					},
+					TEXT,
+				],
+			],
+			[
+				"a code execution result",
+				[
+					{
+						start: {
+							type: "code_execution_tool_result",
+							tool_use_id: "c",
+							content: {
+								type: "code_execution_result",
+								stdout: "",
+								stderr: "",
+								return_code: 0,
+								content: [],
+							},
+						},
+						deltas: [],
+					},
+					TEXT,
+				],
+			],
+			[
+				"malformed tool input",
+				[
+					{
+						start: {
+							type: "server_tool_use",
+							id: "s",
+							name: "web_search",
+							input: {},
+						},
+						deltas: [
+							{ type: "input_json_delta", partial_json: '{"query": "cut' },
+						],
+					},
+					TEXT,
+				],
+			],
+		])("should not store a stream with %s", async (_, blocks) => {
+			const { ai, cache, create } = await setup(() =>
+				sdkStream(streamOf(blocks)),
+			);
+
+			await drain(await ai.messages.create(body));
+			await cache.flush();
+			await drain(await ai.messages.create(body));
+
+			expect(create).toHaveBeenCalledTimes(2);
+		});
+
+		it("should keep usage objects such as server_tool_use from the final delta", async () => {
+			const events = streamOf([
 				{
 					start: {
 						type: "server_tool_use",
@@ -401,16 +564,141 @@ describe("withCache for Anthropic, streaming", () => {
 					deltas: [],
 				},
 				TEXT,
-			];
-			const { ai, cache, create } = await setup(() =>
-				sdkStream(streamOf(blocks)),
-			);
+			]).map((e) =>
+				e.type === "message_start"
+					? {
+							...e,
+							message: {
+								...e.message,
+								usage: {
+									...e.message.usage,
+									server_tool_use: { web_search_requests: 0 },
+								},
+							},
+						}
+					: e.type === "message_delta"
+						? {
+								...e,
+								usage: {
+									...e.usage,
+									server_tool_use: { web_search_requests: 1 },
+								},
+							}
+						: e,
+			) as RawMessageStreamEvent[];
+			const { ai, cache } = await setup(() => sdkStream(events));
+			const original = await finalMessage(sdkStream(events));
+
+			await drain(await ai.messages.create(body));
+			await cache.flush();
+			const replayed = await finalMessage(await ai.messages.create(body));
+
+			expect(original.usage.server_tool_use).toEqual({
+				web_search_requests: 1,
+			});
+			expect(replayed.usage).toEqual(original.usage);
+		});
+
+		it("should not store a stream whose message carries a container", async () => {
+			const events = streamOf([TEXT]).map((e) =>
+				e.type === "message_delta"
+					? {
+							...e,
+							delta: {
+								...e.delta,
+								container: {
+									id: "cntr_1",
+									expires_at: "2026-09-28T20:00:00Z",
+									skills: null,
+								},
+							},
+						}
+					: e,
+			) as RawMessageStreamEvent[];
+			const { ai, cache, create } = await setup(() => sdkStream(events));
 
 			await drain(await ai.messages.create(body));
 			await cache.flush();
 			await drain(await ai.messages.create(body));
 
 			expect(create).toHaveBeenCalledTimes(2);
+		});
+
+		it("should not store a web search turn that paused", async () => {
+			const events = streamOf([
+				{
+					start: {
+						type: "server_tool_use",
+						id: "s",
+						name: "web_search",
+						input: {},
+					},
+					deltas: [],
+				},
+			]).map((e) =>
+				e.type === "message_delta"
+					? { ...e, delta: { ...e.delta, stop_reason: "pause_turn" } }
+					: e,
+			) as RawMessageStreamEvent[];
+			const { ai, cache, create } = await setup(() => sdkStream(events));
+
+			await drain(await ai.messages.create(body));
+			await cache.flush();
+			await drain(await ai.messages.create(body));
+
+			expect(create).toHaveBeenCalledTimes(2);
+		});
+	});
+
+	describe("shadow mode", () => {
+		it("should stream from the model and report the cached answer once the stream ends", async () => {
+			const shadows: ShadowEvent[] = [];
+			const { ai, cache, create, client } = await setup(undefined, {
+				onShadow: (e) => shadows.push(e),
+			});
+			await drain(await ai.messages.create(body));
+			await cache.flush();
+
+			const shadowAi = withCache(client, cache, { shadow: true });
+			const stream = await shadowAi.messages.create(body);
+			expect(shadows).toEqual([]);
+			await drain(stream);
+
+			expect(create).toHaveBeenCalledTimes(2);
+			expect(shadows).toHaveLength(1);
+			expect(shadows[0]).toMatchObject({ result: "exact_hit", similarity: 1 });
+		});
+
+		it("should not report a shadow hit for an aborted stream", async () => {
+			const shadows: ShadowEvent[] = [];
+			const { ai, cache, client } = await setup(undefined, {
+				onShadow: (e) => shadows.push(e),
+			});
+			await drain(await ai.messages.create(body));
+			await cache.flush();
+
+			const stream = await withCache(client, cache, {
+				shadow: true,
+			}).messages.create(body);
+			for await (const _ of stream) stream.controller.abort();
+
+			expect(shadows).toEqual([]);
+		});
+
+		it("should run the stream() helper against the model in shadow mode", async () => {
+			const shadows: ShadowEvent[] = [];
+			const { ai, cache, create, client } = await setup(undefined, {
+				onShadow: (e) => shadows.push(e),
+			});
+			await drain(await ai.messages.create(body));
+			await cache.flush();
+
+			await withCache(client, cache, { shadow: true })
+				.messages.stream((({ stream: _, ...rest }) => rest)(body))
+				.finalMessage();
+
+			expect(create).toHaveBeenCalledTimes(2);
+			expect(shadows).toHaveLength(1);
 		});
 	});
 });

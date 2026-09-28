@@ -97,7 +97,7 @@ With either wrapper, results come back as plain Promises, so `.withResponse()` i
 
 `create({ stream: true })` and the SDK helpers `chat.completions.stream()` and `messages.stream()` go through the cache too. On a miss you get the SDK's stream untouched, and the answer is stored once the stream has ended normally. On a hit you get a real SDK `Stream` that replays the stored answer, so `for await`, `tee()` and `toReadableStream()` work as usual.
 
-- Nothing is stored if the stream is aborted, fails, is cut short or calls tools. Anthropic streams with thinking, redacted thinking or citations are stored and replayed block for block; streams with server tools (web search, code execution) are not, although the same answer without streaming is. Stopping with a `break` counts as cut short, even on the final chunk.
+- Nothing is stored if the stream is aborted, fails, is cut short or calls tools. Anthropic streams with thinking, redacted thinking, citations, web search, web fetch or tool search are stored and replayed block for block. Answers that ran code are never stored, streamed or not: they point at a container that expires. Search results age, so give those routes a `ttl`. Stopping with a `break` counts as cut short, even on the final chunk.
 - Streamed and plain requests are cached separately.
 - Replays send the whole answer in one content chunk rather than token by token.
 - On a cached answer through Anthropic's `messages.stream()`, `request_id` is null and the helper's `withResponse()` throws: there is no HTTP response behind it.
@@ -126,6 +126,23 @@ const chat = withCache(openai, cache, { namespace: tenantId, semantic: false });
 ```
 
 Exact-only entries are stored without an embedding, which needs the schema from `migrate()` in 0.4 or later.
+
+## Trying it on live traffic: shadow mode
+
+With `shadow: true`, the cache looks up every request but never serves the result: the model is always called and your users always get its answer. Each lookup event is flagged `shadow`, misses are still stored (so the cache is warm when you turn shadow off), and `onShadow` receives each hit that *would* have been served next to the fresh answer, so you can check them before trusting the cache. It is only called when the fresh answer could itself be stored: not for a tool call or a stream that was cut short.
+
+```ts
+const cache = createCache({
+  pool,
+  embed,
+  shadow: true,
+  onShadow: ({ result, similarity, cached, fresh, namespace }) => {
+    reviewQueue.push({ namespace, result, similarity, cached, fresh }); // or an LLM judge, or a sample for humans
+  },
+});
+```
+
+Shadow mode works on every path (`wrap`, `create` with or without streaming, the SDK `.stream()` helpers) and can also be set per call. `onShadow` is the only hook that receives response content, so treat it like the cache table itself when it comes to personal data. Shadow lookups are counted in their own metric and never as tokens saved.
 
 ## Benchmark
 
@@ -162,7 +179,9 @@ Reproduce with `pnpm bench` (needs Docker and `OPENAI_API_KEY`; embeddings are c
 | `embedTimeoutMs` | `5000` | For the embedding call, which is then aborted |
 | `awaitStore` | `false` | Wait for the write on a miss; otherwise call `cache.flush()` before shutdown |
 | `onError` | `console.warn` | `(error, stage)`, never receives prompt or response text |
-| `onLookup` | none | `({ result, namespace, similarity })` for each lookup |
+| `onLookup` | none | `({ result, namespace, similarity, shadow })` for each lookup |
+| `shadow` | `false` | Look up but never serve; also per call (see above) |
+| `onShadow` | none | `({ result, similarity, cached, fresh })` for each hit shadow mode would have served. **Receives response content** |
 
 ## Metrics
 
@@ -180,6 +199,7 @@ const cache = createCache({ pool, embed, ...prometheusHooks({ client, pool }) })
 | `llm_cache_lookup_duration_seconds` | histogram | `stage`: exact, embed, semantic |
 | `llm_cache_similarity` | histogram | none; best score of each semantic lookup |
 | `llm_cache_errors_total` | counter | `stage` |
+| `llm_cache_shadow_lookups_total` | counter | `result`, and `namespace` if enabled; shadow mode only |
 | `llm_cache_entries` | gauge | `table`; from Postgres statistics, only when `pool` is given |
 
 A Grafana dashboard is in [grafana/dashboard.json](grafana/dashboard.json). To see it with live traffic, no API key needed:
@@ -202,6 +222,7 @@ await cache.prune();                              // delete expired entries, in 
 await cache.invalidate({ namespace: tenantId });  // everything for one tenant
 await cache.invalidate({ model: "gpt-4.1-mini" }); // after a model upgrade
 await cache.invalidate({ key: { model, messages }, namespace: tenantId }); // one bad answer
+await cache.stats();                              // entries, expired, hits, size, top namespaces and models
 ```
 
 Run `prune()` on a schedule when you use a TTL; expired entries are never served, but they stay in the table until then. Both calls throw on failure, unlike lookups. After deleting many rows, a `VACUUM` lets Postgres reuse the space in the HNSW index.

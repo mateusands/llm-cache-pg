@@ -40,9 +40,10 @@ services:
     environment:
       GF_AUTH_ANONYMOUS_ENABLED: "true"
       GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
-      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/llm-cache-pg.json
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/dashboard.json
     volumes:
       - ./provisioning:/etc/grafana/provisioning:ro
-      - ../../grafana/dashboard.json:/var/lib/grafana/dashboards/llm-cache-pg.json:ro
+      # The folder, not the file: a single-file bind mount keeps the old copy once an editor saves a new one.
+      - ../../grafana:/var/lib/grafana/dashboards:ro
     ports:
       - "3000:3000"

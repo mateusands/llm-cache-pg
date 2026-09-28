@@ -127,3 +127,40 @@ describe("invalidate", () => {
 		).rejects.toThrow(/cacheable/);
 	});
 });
+
+describe("stats", () => {
+	it("should report exact counts for the table", async () => {
+		const { cache, table } = await setup();
+		await cache.set(key("a"), 1, { namespace: "t1" });
+		await cache.set(key("b"), 2, { namespace: "t1", ttl: 1 });
+		await cache.set(key("c", "m2"), 3, { namespace: "t2" });
+		await new Promise((r) => setTimeout(r, 20));
+
+		const stats = await cache.stats();
+
+		expect(stats).toMatchObject({
+			table,
+			entries: 3,
+			expired: 1,
+			withoutEmbedding: 0,
+			hits: 0,
+			schemaVersion: 2,
+		});
+		expect(stats.pgvectorVersion).toMatch(/^\d+\.\d+/);
+		expect(stats.namespaces).toEqual([
+			{ name: "t1", entries: 2 },
+			{ name: "t2", entries: 1 },
+		]);
+		expect(stats.totalBytes).toBeGreaterThan(0);
+	});
+
+	it("should throw and say to migrate when the table does not exist", async () => {
+		const cache = createCache({
+			pool,
+			embed,
+			table: uniqueTable(),
+			onError: () => {},
+		});
+		await expect(cache.stats()).rejects.toThrow(/migrate/);
+	});
+});
