@@ -182,6 +182,8 @@ PGVECTOR_IMAGE=pgvector/pgvector:0.7.4-pg17 pnpm test:integration  # outro pgvec
 pnpm bench           # benchmark (Docker + OPENAI_API_KEY)
 ```
 
+Leia o [CONTRIBUTING.md](CONTRIBUTING.md) (em inglês) antes de abrir um pull request.
+
 ## Roadmap
 
 - [x] v0.1: busca e gravação, wrapper da OpenAI, migração SQL, testes contra Postgres real
