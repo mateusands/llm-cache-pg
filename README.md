@@ -269,3 +269,9 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
 ## License
 
 [MIT](LICENSE)
+
+## About AI assistance
+
+This project was built with the help of artificial intelligence, used as an assistant throughout development and maintenance.
+
+In practice, AI takes on the repetitive, low-level work: writing the code for a path that has already been decided, converting icons, drafting and updating documentation, putting together validation scripts, tracking down the exact point of a defect. Decisions about scope, architecture and design are made by people, and every change goes through human review before it lands, including the ones the AI wrote entirely.

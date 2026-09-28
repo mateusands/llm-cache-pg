@@ -269,3 +269,9 @@ Leia o [CONTRIBUTING.md](CONTRIBUTING.md) (em inglês) antes de abrir um pull re
 ## Licença
 
 [MIT](LICENSE)
+
+## Sobre o uso de IA
+
+Este projeto foi construído com auxílio de inteligência artificial usada como assistente ao longo do desenvolvimento e da manutenção.
+
+Na prática, a IA entra no trabalho repetitivo e de baixo nível: escrever o código de um caminho já decidido, converter ícones, redigir e atualizar documentação, montar scripts de validação, procurar o ponto exato de um defeito. As decisões de escopo, arquitetura e desenho são humanas, e toda mudança passa por revisão de gente antes de entrar — inclusive as que a IA escreveu por inteiro.
