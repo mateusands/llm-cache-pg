@@ -69,6 +69,62 @@ function events(
 	) as RawMessageStreamEvent[];
 }
 
+/** A full event stream for the given blocks, each started empty and then filled by its deltas. */
+function streamOf(
+	blocks: { start: unknown; deltas: unknown[] }[],
+): RawMessageStreamEvent[] {
+	const usage = {
+		input_tokens: 10,
+		output_tokens: 1,
+		cache_creation_input_tokens: 0,
+		cache_read_input_tokens: 0,
+	};
+	return [
+		{
+			type: "message_start",
+			message: {
+				id: "msg_b",
+				type: "message",
+				role: "assistant",
+				model: "claude-test",
+				content: [],
+				stop_reason: null,
+				stop_sequence: null,
+				usage,
+			},
+		},
+		...blocks.flatMap((b, index) => [
+			{ type: "content_block_start", index, content_block: b.start },
+			...b.deltas.map((delta) => ({
+				type: "content_block_delta",
+				index,
+				delta,
+			})),
+			{ type: "content_block_stop", index },
+		]),
+		{
+			type: "message_delta",
+			delta: { stop_reason: "end_turn", stop_sequence: null },
+			usage: { output_tokens: 9 },
+		},
+		{ type: "message_stop" },
+	] as RawMessageStreamEvent[];
+}
+
+const TEXT = {
+	start: { type: "text", text: "", citations: null },
+	deltas: [{ type: "text_delta", text: "Paris." }],
+};
+const citation = (text: string, start: number) => ({
+	type: "char_location",
+	cited_text: text,
+	document_index: 0,
+	document_title: null,
+	start_char_index: start,
+	end_char_index: start + text.length,
+	file_id: null,
+});
+
 /** A real SDK Stream. Like the SDK's own, it ends quietly when its controller is aborted. */
 function sdkStream(
 	items: RawMessageStreamEvent[],
@@ -210,7 +266,6 @@ describe("withCache for Anthropic, streaming", () => {
 	it.each([
 		["no message_stop", { end: false }],
 		["tool use", { block: "tool_use", stop: "tool_use" }],
-		["thinking blocks", { block: "thinking" }],
 		["a truncated answer", { stop: "max_tokens" }],
 	] as const)("should not store a stream with %s", async (_, options) => {
 		const { ai, cache, create } = await setup(() => sdkStream(events(options)));
@@ -276,6 +331,86 @@ describe("withCache for Anthropic, streaming", () => {
 
 			await expect(helper.finalMessage()).rejects.toThrow();
 			expect(completed).not.toHaveBeenCalled();
+		});
+	});
+
+	describe("content other than plain text", () => {
+		it.each([
+			[
+				"thinking with its signature",
+				[
+					{
+						start: { type: "thinking", thinking: "", signature: "" },
+						deltas: [
+							{ type: "thinking_delta", thinking: "The user wants " },
+							{ type: "thinking_delta", thinking: "a capital." },
+							{ type: "signature_delta", signature: "sig-partial" },
+							{ type: "signature_delta", signature: "sig-final" },
+						],
+					},
+					TEXT,
+				],
+			],
+			[
+				"redacted thinking",
+				[
+					{ start: { type: "redacted_thinking", data: "opaque" }, deltas: [] },
+					TEXT,
+				],
+			],
+			[
+				"text with citations",
+				[
+					{
+						start: { type: "text", text: "", citations: null },
+						deltas: [
+							{ type: "text_delta", text: "Paris is the capital of France." },
+							{ type: "citations_delta", citation: citation("Paris", 0) },
+							{ type: "citations_delta", citation: citation("France", 24) },
+						],
+					},
+				],
+			],
+			[
+				"text that starts with an empty citation list",
+				[{ ...TEXT, start: { type: "text", text: "", citations: [] } }],
+			],
+		])("should store and replay %s, block for block", async (_, blocks) => {
+			const { ai, cache, create } = await setup(() =>
+				sdkStream(streamOf(blocks)),
+			);
+			const original = await finalMessage(sdkStream(streamOf(blocks)));
+
+			await drain(await ai.messages.create(body));
+			await cache.flush();
+			const replayed = await finalMessage(await ai.messages.create(body));
+
+			expect(create).toHaveBeenCalledTimes(1);
+			expect(replayed.content).toEqual(original.content);
+		});
+
+		it("should still not store a stream with server tool blocks", async () => {
+			const blocks = [
+				{
+					start: {
+						type: "server_tool_use",
+						id: "s",
+						name: "web_search",
+						input: {},
+					},
+					deltas: [],
+				},
+				TEXT,
+			];
+			const { ai, cache, create } = await setup(() =>
+				sdkStream(streamOf(blocks)),
+			);
+
+			await drain(await ai.messages.create(body));
+			await cache.flush();
+			await drain(await ai.messages.create(body));
+
+			expect(create).toHaveBeenCalledTimes(2);
 		});
 	});
 });

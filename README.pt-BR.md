@@ -97,7 +97,7 @@ Nos dois wrappers, os resultados voltam como Promises comuns, então `.withRespo
 
 O `create({ stream: true })` e os helpers dos SDKs, `chat.completions.stream()` e `messages.stream()`, também passam pelo cache. Num miss, você recebe o stream do SDK intacto, e a resposta é gravada quando o stream termina normalmente. Num hit, você recebe um `Stream` de verdade do SDK que reproduz a resposta gravada, então `for await`, `tee()` e `toReadableStream()` funcionam como sempre.
 
-- Nada é gravado se o stream for abortado, der erro, for interrompido, chamar tools ou (por enquanto) tiver algo além de texto. Parar de ler com `break` conta como interrompido, inclusive um `break` no chunk final.
+- Nada é gravado se o stream for abortado, der erro, for interrompido ou chamar tools. Streams da Anthropic com thinking, redacted thinking ou citações são gravados e reproduzidos bloco a bloco; streams com tools de servidor (web search, execução de código) não são, embora a mesma resposta sem stream seja. Parar de ler com `break` conta como interrompido, inclusive um `break` no chunk final.
 - Pedidos com e sem stream são cacheados separadamente.
 - A reprodução manda a resposta inteira num único chunk de conteúdo, e não token a token.
 - Numa resposta do cache pelo `messages.stream()` da Anthropic, o `request_id` é nulo e o `withResponse()` do helper lança erro: não existe resposta HTTP por trás.

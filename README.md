@@ -97,7 +97,7 @@ With either wrapper, results come back as plain Promises, so `.withResponse()` i
 
 `create({ stream: true })` and the SDK helpers `chat.completions.stream()` and `messages.stream()` go through the cache too. On a miss you get the SDK's stream untouched, and the answer is stored once the stream has ended normally. On a hit you get a real SDK `Stream` that replays the stored answer, so `for await`, `tee()` and `toReadableStream()` work as usual.
 
-- Nothing is stored if the stream is aborted, fails, is cut short, calls tools, or (for now) contains anything but text. Stopping with a `break` counts as cut short, even on the final chunk.
+- Nothing is stored if the stream is aborted, fails, is cut short or calls tools. Anthropic streams with thinking, redacted thinking or citations are stored and replayed block for block; streams with server tools (web search, code execution) are not, although the same answer without streaming is. Stopping with a `break` counts as cut short, even on the final chunk.
 - Streamed and plain requests are cached separately.
 - Replays send the whole answer in one content chunk rather than token by token.
 - On a cached answer through Anthropic's `messages.stream()`, `request_id` is null and the helper's `withResponse()` throws: there is no HTTP response behind it.
