@@ -4,6 +4,8 @@ All notable changes to this project. The format follows [Keep a Changelog](https
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-28
+
 ### Added
 
 - `threshold` and `semantic` per call, and `semantic` on the cache. With `semantic: false` only exact matches are served and no embedding is computed.
@@ -59,7 +61,8 @@ Not published to npm.
 - `llm-cache-pg/openai`: chat completions wrapper and embedder.
 - `cache.flush()` to wait for background writes before shutdown.
 
-[Unreleased]: https://github.com/mateusands/llm-cache-pg/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/mateusands/llm-cache-pg/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/mateusands/llm-cache-pg/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/mateusands/llm-cache-pg/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/mateusands/llm-cache-pg/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/mateusands/llm-cache-pg/releases/tag/v0.1.0
