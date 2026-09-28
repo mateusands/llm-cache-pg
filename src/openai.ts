@@ -90,11 +90,15 @@ function bypasses(body: ChatCompletionCreateParamsBase): boolean {
 }
 
 function isPlainAnswer(response: ChatCompletion): boolean {
-	return response.choices.every(
-		(c) =>
-			c.finish_reason === "stop" &&
-			!c.message.tool_calls?.length &&
-			!c.message.function_call,
+	// every() is true on an empty array, so an answer with no choices has to be ruled out first.
+	return (
+		response.choices.length > 0 &&
+		response.choices.every(
+			(c) =>
+				c.finish_reason === "stop" &&
+				!c.message.tool_calls?.length &&
+				!c.message.function_call,
+		)
 	);
 }
 

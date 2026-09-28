@@ -160,6 +160,7 @@ describe("withCache for OpenAI", () => {
 				],
 			}),
 		],
+		["no choices at all", completion("", { choices: [] })],
 		[
 			"a truncated answer",
 			completion("", {

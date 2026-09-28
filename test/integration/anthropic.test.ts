@@ -162,6 +162,7 @@ describe("withCache for Anthropic", () => {
 				content: [{ type: "tool_use", id: "t", name: "x", input: {} }],
 			}),
 		],
+		["no content blocks", message({ content: [] })],
 		["a truncated answer", message({ stop_reason: "max_tokens" })],
 		["a refusal", message({ stop_reason: "refusal" })],
 	])("should not store a response with %s", async (_, answer) => {

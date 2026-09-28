@@ -53,6 +53,7 @@ const COMPLETE = new Set(["end_turn", "stop_sequence"]);
 function isPlainAnswer(response: Message): boolean {
 	return (
 		COMPLETE.has(response.stop_reason ?? "") &&
+		response.content.length > 0 &&
 		!response.content.some((block) => block.type === "tool_use")
 	);
 }
