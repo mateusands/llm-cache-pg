@@ -14,13 +14,13 @@ import {
 	recordHit,
 	type StoreConfig,
 } from "../../src/store.ts";
-import { testPool, uniqueTable } from "./db.ts";
+import { iterativeScan, testPool, uniqueTable } from "./db.ts";
 
 const pool = testPool();
 const table = uniqueTable();
 const config: StoreConfig = {
 	table,
-	iterativeScan: true,
+	iterativeScan,
 	lookupTimeoutMs: 1000,
 	writeTimeoutMs: 5000,
 };
@@ -240,14 +240,18 @@ describe("findNearest in a busy table", () => {
 		expect(match).toBeNull();
 	});
 
-	it("should find the only entry of its namespace among 10k closer entries of another", async () => {
-		const match = await findNearest(
-			forcedHnsw,
-			busyConfig,
-			"target",
-			keyFor("busy"),
-			[1, 0, 0],
-		);
-		expect(match?.response).toEqual({ answer: "target" });
-	});
+	// pgvector < 0.8 has no iterative scans: the test above is the documented behavior there.
+	it.runIf(iterativeScan)(
+		"should find the only entry of its namespace among 10k closer entries of another",
+		async () => {
+			const match = await findNearest(
+				forcedHnsw,
+				busyConfig,
+				"target",
+				keyFor("busy"),
+				[1, 0, 0],
+			);
+			expect(match?.response).toEqual({ answer: "target" });
+		},
+	);
 });

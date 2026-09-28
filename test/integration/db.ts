@@ -1,6 +1,10 @@
 import { randomBytes } from "node:crypto";
 import pg from "pg";
 import { afterAll, inject } from "vitest";
+import { supportsIterativeScan } from "../../src/migrate.ts";
+
+export const pgvectorVersion: string = inject("pgvectorVersion");
+export const iterativeScan: boolean = supportsIterativeScan(pgvectorVersion);
 
 /** A pool for the shared container, closed after the calling test file. */
 export function testPool(): pg.Pool {

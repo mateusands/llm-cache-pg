@@ -127,6 +127,35 @@ describe("cache hits", () => {
 	});
 });
 
+describe("lookup events", () => {
+	it("should report how long each stage took", async () => {
+		const { ask, events } = await migrated();
+
+		await ask("How do I reset my password?");
+		await ask("How do I reset my password?");
+
+		expect(Object.keys(events[0]?.durations ?? {}).sort()).toEqual([
+			"embed",
+			"exact",
+			"semantic",
+		]);
+		expect(Object.keys(events[1]?.durations ?? {})).toEqual(["exact"]);
+		expect(events[0]?.durations.exact).toBeGreaterThan(0);
+	});
+
+	it("should report the tokens a hit saved", async () => {
+		const { cache, events } = await migrated();
+		const key = request("How do I reset my password?");
+		const fn = async () => ({ answer: "a" });
+
+		await cache.wrap(fn, { key, usage: () => ({ input: 30, output: 12 }) });
+		await cache.wrap(fn, { key });
+
+		expect(events[0]?.tokens).toBeUndefined();
+		expect(events[1]?.tokens).toEqual({ input: 30, output: 12 });
+	});
+});
+
 describe("partition isolation", () => {
 	it("should never answer from another namespace", async () => {
 		const { ask, calls } = await migrated();

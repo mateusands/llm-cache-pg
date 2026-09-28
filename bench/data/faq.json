@@ -1,0 +1,207 @@
+{
+	"description": "Support-style pairs written for this benchmark. duplicate=true: same question, same answer. duplicate=false: looks alike, needs a different answer. Illustrative, small n.",
+	"en": [
+		{
+			"q1": "How do I reset my password?",
+			"q2": "How can I reset my password?",
+			"duplicate": true
+		},
+		{
+			"q1": "How do I change my email address?",
+			"q2": "Where can I update the email on my account?",
+			"duplicate": true
+		},
+		{
+			"q1": "Can I get a refund for my last payment?",
+			"q2": "Is it possible to be refunded for the most recent charge?",
+			"duplicate": true
+		},
+		{
+			"q1": "How do I delete my account?",
+			"q2": "How can I permanently close my account?",
+			"duplicate": true
+		},
+		{
+			"q1": "What payment methods do you accept?",
+			"q2": "Which ways can I pay?",
+			"duplicate": true
+		},
+		{
+			"q1": "How do I enable two-factor authentication?",
+			"q2": "How do I turn on 2FA?",
+			"duplicate": true
+		},
+		{
+			"q1": "Where can I download my invoices?",
+			"q2": "How do I get a copy of my invoices?",
+			"duplicate": true
+		},
+		{
+			"q1": "How long does shipping take?",
+			"q2": "How many days until my package arrives?",
+			"duplicate": true
+		},
+		{
+			"q1": "Do you ship internationally?",
+			"q2": "Can you deliver outside the country?",
+			"duplicate": true
+		},
+		{
+			"q1": "How do I contact support?",
+			"q2": "How can I reach customer service?",
+			"duplicate": true
+		},
+		{
+			"q1": "How do I cancel my order?",
+			"q2": "How do I cancel my subscription?",
+			"duplicate": false
+		},
+		{
+			"q1": "How do I change my password?",
+			"q2": "How do I change my username?",
+			"duplicate": false
+		},
+		{
+			"q1": "Can I get a refund on a subscription?",
+			"q2": "Can I get a refund on a gift card?",
+			"duplicate": false
+		},
+		{
+			"q1": "How do I add a user to my team?",
+			"q2": "How do I remove a user from my team?",
+			"duplicate": false
+		},
+		{
+			"q1": "Is shipping free in the US?",
+			"q2": "Is shipping free in Canada?",
+			"duplicate": false
+		},
+		{
+			"q1": "How do I upgrade my plan?",
+			"q2": "How do I downgrade my plan?",
+			"duplicate": false
+		},
+		{
+			"q1": "Why was my card declined?",
+			"q2": "Why was my card charged twice?",
+			"duplicate": false
+		},
+		{
+			"q1": "How do I export my data to CSV?",
+			"q2": "How do I import my data from CSV?",
+			"duplicate": false
+		},
+		{
+			"q1": "What happens when my trial ends?",
+			"q2": "What happens when my subscription is paused?",
+			"duplicate": false
+		},
+		{
+			"q1": "Can I change my delivery address after ordering?",
+			"q2": "Can I change my billing address after ordering?",
+			"duplicate": false
+		}
+	],
+	"pt": [
+		{
+			"q1": "Como faço para redefinir minha senha?",
+			"q2": "Como consigo trocar minha senha esquecida?",
+			"duplicate": true
+		},
+		{
+			"q1": "Como altero meu e-mail cadastrado?",
+			"q2": "Onde eu mudo o e-mail da minha conta?",
+			"duplicate": true
+		},
+		{
+			"q1": "Posso pedir reembolso do último pagamento?",
+			"q2": "É possível receber de volta a última cobrança?",
+			"duplicate": true
+		},
+		{
+			"q1": "Como excluo minha conta?",
+			"q2": "Como apago minha conta de vez?",
+			"duplicate": true
+		},
+		{
+			"q1": "Quais formas de pagamento vocês aceitam?",
+			"q2": "Como posso pagar?",
+			"duplicate": true
+		},
+		{
+			"q1": "Como ativo a autenticação em dois fatores?",
+			"q2": "Como ligo o 2FA?",
+			"duplicate": true
+		},
+		{
+			"q1": "Onde baixo minhas notas fiscais?",
+			"q2": "Como pego a segunda via da nota fiscal?",
+			"duplicate": true
+		},
+		{
+			"q1": "Quanto tempo demora a entrega?",
+			"q2": "Em quantos dias meu pedido chega?",
+			"duplicate": true
+		},
+		{
+			"q1": "Vocês entregam fora do Brasil?",
+			"q2": "Fazem envio internacional?",
+			"duplicate": true
+		},
+		{
+			"q1": "Como falo com o suporte?",
+			"q2": "Como entro em contato com o atendimento?",
+			"duplicate": true
+		},
+		{
+			"q1": "Como cancelo meu pedido?",
+			"q2": "Como cancelo minha assinatura?",
+			"duplicate": false
+		},
+		{
+			"q1": "Como troco minha senha?",
+			"q2": "Como troco meu nome de usuário?",
+			"duplicate": false
+		},
+		{
+			"q1": "Posso pedir reembolso de uma assinatura?",
+			"q2": "Posso pedir reembolso de um vale-presente?",
+			"duplicate": false
+		},
+		{
+			"q1": "Como adiciono um usuário à minha equipe?",
+			"q2": "Como removo um usuário da minha equipe?",
+			"duplicate": false
+		},
+		{
+			"q1": "O frete é grátis para São Paulo?",
+			"q2": "O frete é grátis para o Nordeste?",
+			"duplicate": false
+		},
+		{
+			"q1": "Como faço upgrade do meu plano?",
+			"q2": "Como faço downgrade do meu plano?",
+			"duplicate": false
+		},
+		{
+			"q1": "Por que meu cartão foi recusado?",
+			"q2": "Por que meu cartão foi cobrado duas vezes?",
+			"duplicate": false
+		},
+		{
+			"q1": "Como exporto meus dados para CSV?",
+			"q2": "Como importo meus dados de um CSV?",
+			"duplicate": false
+		},
+		{
+			"q1": "O que acontece quando meu teste grátis acaba?",
+			"q2": "O que acontece quando minha assinatura é pausada?",
+			"duplicate": false
+		},
+		{
+			"q1": "Posso mudar o endereço de entrega depois de comprar?",
+			"q2": "Posso mudar o endereço de cobrança depois de comprar?",
+			"duplicate": false
+		}
+	]
+}

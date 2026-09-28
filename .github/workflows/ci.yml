@@ -34,3 +34,23 @@ jobs:
       - run: pnpm test
       - run: pnpm build
       - run: node test/consumer/smoke.mjs
+
+  pgvector:
+    name: pgvector ${{ matrix.image }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Oldest supported pgvector, oldest Postgres with iterative scans; the default image runs above.
+        image: [0.7.4-pg17, 0.8.0-pg13]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test:integration
+        env:
+          PGVECTOR_IMAGE: pgvector/pgvector:${{ matrix.image }}

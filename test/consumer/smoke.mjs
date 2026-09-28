@@ -43,7 +43,9 @@ try {
 		join(dir, "esm.mjs"),
 		`import { createCache, migrate, renderMigrationSql } from "llm-cache-pg";
 import { withCache, openaiEmbedder } from "llm-cache-pg/openai";
-for (const f of [createCache, migrate, renderMigrationSql, withCache, openaiEmbedder]) {
+import { prometheusHooks } from "llm-cache-pg/prometheus";
+import { withCache as withAnthropicCache } from "llm-cache-pg/anthropic";
+for (const f of [createCache, migrate, renderMigrationSql, withCache, openaiEmbedder, prometheusHooks, withAnthropicCache]) {
   if (typeof f !== "function") throw new Error("missing export");
 }
 if (!renderMigrationSql().includes("CREATE TABLE")) throw new Error("bad SQL");
@@ -69,7 +71,15 @@ createCache({ pool, embed: async () => [0], threshold: 0.9, ttl: "7d" });`,
 	run("npx", ["tsc", "-p", "."]);
 	console.log("core types ok without openai");
 
-	run("npm", ["install", "--no-audit", "--no-fund", "openai@7"]);
+	run("npm", [
+		"install",
+		"--no-audit",
+		"--no-fund",
+		"openai@7",
+		"@prometheus-io/client@0.16",
+		"prom-client@15",
+		"@anthropic-ai/sdk@0.128",
+	]);
 	writeFileSync(
 		join(dir, "openai.ts"),
 		`import OpenAI from "openai";
@@ -82,8 +92,28 @@ const ai = withCache(client, cache, { namespace: "t" });
 const res = ai.chat.completions.create({ model: "m", messages: [{ role: "user", content: "hi" }] });
 res.then((r) => r.choices[0]?.message.content);`,
 	);
+	writeFileSync(
+		join(dir, "anthropic.ts"),
+		`import Anthropic from "@anthropic-ai/sdk";
+import { createCache, type Pool } from "llm-cache-pg";
+import { withCache } from "llm-cache-pg/anthropic";
+declare const pool: Pool;
+const cache = createCache({ pool, embed: async () => [0] });
+const ai = withCache(new Anthropic({ apiKey: "x" }), cache, { namespace: "t" });
+ai.messages.create({ model: "m", max_tokens: 10, messages: [{ role: "user", content: "hi" }] }).then((r) => r.content);`,
+	);
+	writeFileSync(
+		join(dir, "prometheus.ts"),
+		`import * as client from "@prometheus-io/client";
+import * as legacy from "prom-client";
+import { createCache, type Pool } from "llm-cache-pg";
+import { prometheusHooks } from "llm-cache-pg/prometheus";
+declare const pool: Pool;
+createCache({ pool, embed: async () => [0], ...prometheusHooks({ client, pool }) });
+createCache({ pool, embed: async () => [0], ...prometheusHooks({ client: legacy, registry: new legacy.Registry() }) });`,
+	);
 	run("npx", ["tsc", "-p", "."]);
-	console.log("openai types ok");
+	console.log("openai, anthropic and prometheus types ok");
 } finally {
 	rmSync(dir, { recursive: true, force: true });
 }

@@ -10,6 +10,7 @@ import type {
 	ChatCompletionCreateParamsStreaming,
 } from "openai/resources/chat/completions";
 import type { Cache, CallOptions, Embedder } from "./cache.ts";
+import { override, without } from "./provider.ts";
 
 type RequestOptions = OpenAI.RequestOptions;
 
@@ -97,21 +98,6 @@ function isPlainAnswer(response: ChatCompletion): boolean {
 	);
 }
 
-/** Returns `target` with `prop` replaced; every other property is read from, and bound to, `target`. */
-function override<T extends object>(
-	target: T,
-	prop: PropertyKey,
-	value: unknown,
-): T {
-	return new Proxy(target, {
-		get(t, p) {
-			if (p === prop) return value;
-			const v = Reflect.get(t, p, t);
-			return typeof v === "function" ? v.bind(t) : v;
-		},
-	});
-}
-
 /**
  * Wraps an OpenAI client so non-streaming `chat.completions.create` calls go through `cache`.
  * Streaming, `n > 1` and audio requests, and every other method, reach the SDK untouched.
@@ -133,9 +119,7 @@ export function withCache<T extends OpenAI>(
 	) => {
 		if (bypasses(body)) return original(body, requestOptions);
 		const { model, messages, ...rest } = body;
-		const params = Object.fromEntries(
-			Object.entries(rest).filter(([k]) => !NON_SEMANTIC.has(k)),
-		);
+		const params = without(rest, NON_SEMANTIC);
 		return cache.wrap(
 			() => original(body, requestOptions) as Promise<ChatCompletion>,
 			{

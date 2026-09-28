@@ -16,6 +16,8 @@ export interface Match {
 	response: unknown;
 	/** Cosine similarity, 1 for an exact match. */
 	similarity: number;
+	tokensIn: number | null;
+	tokensOut: number | null;
 }
 
 export interface NewEntry {
@@ -48,6 +50,7 @@ function toVector(values: readonly number[]): string {
 }
 
 const LIVE = "(expires_at IS NULL OR expires_at > now())";
+const MATCH_COLUMNS = `id, response, tokens_in AS "tokensIn", tokens_out AS "tokensOut"`;
 
 export async function findExact(
 	pool: Pool,
@@ -59,15 +62,14 @@ export async function findExact(
 		pool,
 		async (client) => {
 			await client.query(lookupPreamble({ ...config, iterativeScan: false }));
-			const { rows } = await client.query<{ id: string; response: unknown }>(
-				`SELECT id, response FROM ${config.table}
+			const { rows } = await client.query<Match>(
+				`SELECT ${MATCH_COLUMNS}, 1::float8 AS similarity FROM ${config.table}
 				 WHERE namespace = $1 AND model = $2 AND key_version = $3 AND params_hash = $4
 				   AND prompt_hash = $5 AND ${LIVE}`,
 				[namespace, key.model, KEY_VERSION, key.paramsHash, key.promptHash],
 			);
 			await client.query("COMMIT");
-			const row = rows[0];
-			return row ? { id: row.id, response: row.response, similarity: 1 } : null;
+			return rows[0] ?? null;
 		},
 		config.lookupTimeoutMs,
 	);
@@ -86,12 +88,8 @@ export async function findNearest(
 		async (client) => {
 			await client.query(lookupPreamble(config));
 			// relaxed_order can return a slightly farther row first; the threshold still applies to it.
-			const { rows } = await client.query<{
-				id: string;
-				response: unknown;
-				similarity: number;
-			}>(
-				`SELECT id, response, 1 - (embedding <=> $1::vector) AS similarity FROM ${config.table}
+			const { rows } = await client.query<Match>(
+				`SELECT ${MATCH_COLUMNS}, 1 - (embedding <=> $1::vector) AS similarity FROM ${config.table}
 				 WHERE namespace = $2 AND model = $3 AND key_version = $4 AND params_hash = $5 AND ${LIVE}
 				 ORDER BY embedding <=> $1::vector
 				 LIMIT 1`,
@@ -166,4 +164,55 @@ export async function recordHit(
 			),
 		config.writeTimeoutMs,
 	);
+}
+
+/** Deletes expired entries `batchSize` at a time, so no single statement holds locks for long. */
+export async function deleteExpired(
+	pool: Pool,
+	table: string,
+	batchSize: number,
+): Promise<number> {
+	let total = 0;
+	for (;;) {
+		const { rowCount } = await pool.query(
+			`DELETE FROM ${table} WHERE id IN (
+			   SELECT id FROM ${table} WHERE expires_at IS NOT NULL AND expires_at <= now() LIMIT $1)`,
+			[batchSize],
+		);
+		total += rowCount ?? 0;
+		if ((rowCount ?? 0) < batchSize) return total;
+	}
+}
+
+export interface EntryFilter {
+	namespace?: string;
+	model?: string;
+	key?: CacheKey;
+}
+
+/** Deletes entries matching every given filter. The caller guarantees at least one is set. */
+export async function deleteMatching(
+	pool: Pool,
+	table: string,
+	filter: EntryFilter,
+): Promise<number> {
+	const conditions: string[] = [];
+	const values: unknown[] = [];
+	const add = (column: string, value: unknown) => {
+		values.push(value);
+		conditions.push(`${column} = $${values.length}`);
+	};
+	if (filter.namespace !== undefined) add("namespace", filter.namespace);
+	if (filter.model !== undefined) add("model", filter.model);
+	if (filter.key) {
+		add("model", filter.key.model);
+		add("key_version", KEY_VERSION);
+		add("params_hash", filter.key.paramsHash);
+		add("prompt_hash", filter.key.promptHash);
+	}
+	const { rowCount } = await pool.query(
+		`DELETE FROM ${table} WHERE ${conditions.join(" AND ")}`,
+		values,
+	);
+	return rowCount ?? 0;
 }
