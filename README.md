@@ -24,7 +24,7 @@ Existing options don't fit a typical TypeScript + Postgres stack:
 
 `llm-cache-pg` lives in your app, uses the Postgres you already run, and only needs the `vector` extension, which managed providers already allow.
 
-**Requirements:** Node 22+, PostgreSQL with pgvector 0.8+ (older pgvector works, with weaker semantic lookups in busy namespaces). No runtime dependencies: you bring the `pg` pool and, optionally, the `openai` client. CI runs the integration suite on pgvector 0.8.6 / Postgres 18, 0.8.0 / Postgres 13 and 0.7.4 / Postgres 17.
+**Requirements:** Node 22+, PostgreSQL with pgvector 0.8+ (older pgvector works, with weaker semantic lookups in busy namespaces). No runtime dependencies in the core: you bring the `pg` pool and, optionally, an SDK client. CI runs the integration suite on pgvector 0.8.6 / Postgres 18, 0.8.0 / Postgres 13 and 0.7.4 / Postgres 17.
 
 ## Features
 
@@ -87,11 +87,19 @@ A runnable version is in [examples/openai-basic](examples/openai-basic/index.ts)
 
 ## What is never cached
 
-- Streaming (including Anthropic's `messages.stream()`), `n > 1` and audio requests: passed straight to the SDK.
+- The SDK stream helpers (`chat.completions.stream()`, `messages.stream()`), `n > 1` and audio requests: passed straight to the SDK. `create({ stream: true })` is cached (see below).
 - Requests whose last message isn't from the user, or has non-text parts such as images.
 - Responses with tool calls, or that didn't finish normally (`finish_reason` other than `stop`; `stop_reason` other than `end_turn` or `stop_sequence`).
 
-With either wrapper, a cached answer comes back as a plain Promise, so `.withResponse()` isn't available on non-streaming calls. With Anthropic, stored token counts include prompt-cache reads and writes.
+With either wrapper, results come back as plain Promises, so `.withResponse()` isn't available. With Anthropic, stored token counts include prompt-cache reads and writes.
+
+### Streaming
+
+`create({ stream: true })` goes through the cache too. On a miss you get the SDK's stream untouched, and the answer is stored once the stream has ended normally. On a hit you get a real SDK `Stream` that replays the stored answer, so `for await`, `tee()` and `toReadableStream()` work as usual.
+
+- Nothing is stored if the stream is aborted, fails, is cut short, calls tools, or (for now) contains anything but text. Stopping with a `break` counts as cut short, even on the final chunk.
+- Streamed and plain requests are cached separately.
+- Replays send the whole answer in one content chunk rather than token by token.
 
 ## Choosing a threshold
 

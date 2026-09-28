@@ -24,3 +24,21 @@ export function without(
 		Object.entries(fields).filter(([k]) => !drop.has(k)),
 	);
 }
+
+/**
+ * Yields `source` unchanged, calling `onChunk` for each item, and `onEnd` only if the source ran
+ * to its end. Stopping early, an error or a signal abort never reach `onEnd`; the SDKs end an
+ * aborted stream quietly, so the signal is checked instead of trusting the end of the loop.
+ */
+export async function* tap<T>(
+	source: AsyncIterable<T>,
+	signal: AbortSignal,
+	onChunk: (chunk: T) => void,
+	onEnd: () => void,
+): AsyncGenerator<T> {
+	for await (const chunk of source) {
+		onChunk(chunk);
+		yield chunk;
+	}
+	if (!signal.aborted) onEnd();
+}

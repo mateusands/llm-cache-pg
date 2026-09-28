@@ -130,7 +130,6 @@ describe("withCache for OpenAI", () => {
 	});
 
 	it.each([
-		["streaming", { stream: true }],
 		["several choices", { n: 2 }],
 		["audio output", { modalities: ["text", "audio"] }],
 	])("should bypass the cache for %s", async (_, extra) => {

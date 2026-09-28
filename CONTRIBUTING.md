@@ -41,7 +41,7 @@ Please keep these in mind; a change that breaks one of them needs a very good re
 
 - **A false hit is worse than a miss.** The partition key is the whole request except the last user message. New fields are part of the key by default; a field is only left out after checking that it cannot change the answer.
 - **The cache fails open.** Lookups never throw to the caller: database or embedder failures and timeouts go to `onError`, and the request reaches the model. Admin calls (`prune`, `invalidate`, `migrate`) do throw.
-- **No runtime dependencies.** `pg`, the SDKs and the Prometheus client are typed structurally or imported as types only. `pnpm test:consumer` checks that the bundles never `require` them.
+- **No runtime dependencies in the core.** `pg` and the Prometheus client are typed structurally. Each provider entry (`./openai`, `./anthropic`) imports only its own SDK, which its users already have, and only for the `Stream` class. `pnpm test:consumer` checks every bundle's imports.
 - **Tests use a real Postgres.** Don't mock the database; mock only what is external, such as the model client. If a test asserts that something does *not* happen, check that it fails when the code does it.
 - **Comments explain what the code can't:** a constraint, a trap already hit, a unit. One line is the default.
 

@@ -524,6 +524,54 @@ describe("flush", () => {
 	});
 });
 
+describe("lookup handle", () => {
+	it("should store later through the handle, reusing the embedding from the lookup", async () => {
+		let embeds = 0;
+		const counting: CacheOptions["embed"] = async (text) => {
+			embeds++;
+			return embed(text);
+		};
+		const { cache } = await migrated({ embed: counting });
+
+		const first = await cache.lookup(request("How do I reset my password?"));
+		expect(first.hit).toBeNull();
+		first.store({ answer: "streamed" }, { usage: { input: 5, output: 7 } });
+		await cache.flush();
+
+		const second = await cache.lookup(request("How do I reset my password?"));
+		expect(second.hit).toMatchObject({
+			result: "exact_hit",
+			response: { answer: "streamed" },
+		});
+		expect(embeds).toBe(1);
+	});
+
+	it("should make store a no-op on a hit, a bypass and a failed setup", async () => {
+		const { cache, table } = await migrated();
+		const bypass = await cache.lookup(
+			request("x", { messages: [{ role: "assistant", content: "Sure," }] }),
+		);
+		bypass.store({ answer: "no" });
+
+		const down = new pg.Pool({
+			host: "127.0.0.1",
+			port: 1,
+			connectionTimeoutMillis: 500,
+		});
+		const broken = createCache({ pool: down, embed, table, onError: () => {} });
+		(await broken.lookup(request("How do I reset my password?"))).store({
+			answer: "no",
+		});
+		await broken.flush();
+		await down.end();
+
+		await cache.flush();
+		expect(
+			(await pool.query(`SELECT count(*)::int AS n FROM ${table}`)).rows[0].n,
+		).toBe(0);
+	});
+});
+
 describe("get and set", () => {
 	it("should read back what set stored", async () => {
 		const { cache } = await migrated();

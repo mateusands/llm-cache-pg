@@ -1,7 +1,7 @@
-// Types only: the published bundle must never require("@anthropic-ai/sdk").
 import type Anthropic from "@anthropic-ai/sdk";
 import type { APIPromise } from "@anthropic-ai/sdk/core/api-promise";
-import type { Stream } from "@anthropic-ai/sdk/core/streaming";
+// The one runtime import: cached streams are replayed as the SDK's own Stream class.
+import { Stream } from "@anthropic-ai/sdk/core/streaming";
 import type {
 	Message,
 	MessageCreateParamsBase,
@@ -10,13 +10,14 @@ import type {
 	RawMessageStreamEvent,
 } from "@anthropic-ai/sdk/resources/messages";
 import type { Cache, CallOptions } from "./cache.ts";
-import { override, without } from "./provider.ts";
+import type { KeyInput } from "./key.ts";
+import { override, tap, without } from "./provider.ts";
 
 type RequestOptions = Anthropic.RequestOptions;
 
 /**
- * `messages.create` as the wrapper exposes it: a cached answer is a plain Promise, so
- * `.withResponse()` and `.asResponse()` are not available on non-streaming calls.
+ * `messages.create` as the wrapper exposes it: results are plain Promises, so `.withResponse()`
+ * and `.asResponse()` are not available. A cached stream is a real SDK `Stream`.
  */
 export interface CachedMessagesCreate {
 	(
@@ -26,7 +27,7 @@ export interface CachedMessagesCreate {
 	(
 		body: MessageCreateParamsStreaming,
 		options?: RequestOptions,
-	): APIPromise<Stream<RawMessageStreamEvent>>;
+	): Promise<Stream<RawMessageStreamEvent>>;
 	(
 		body: MessageCreateParamsBase,
 		options?: RequestOptions,
@@ -68,6 +69,104 @@ function inputTokens(response: Message): number {
 	);
 }
 
+/** Builds the final message from stream events; null until message_stop, or if not all text. */
+function assembler() {
+	let message: Message | undefined;
+	let stopped = false;
+	let plainText = true;
+	const texts: string[] = [];
+	return {
+		add(event: RawMessageStreamEvent): void {
+			switch (event.type) {
+				case "message_start":
+					message = { ...event.message, content: [] };
+					break;
+				case "content_block_start":
+					if (event.content_block.type === "text") texts[event.index] = "";
+					else plainText = false;
+					break;
+				case "content_block_delta":
+					if (event.delta.type === "text_delta")
+						texts[event.index] = (texts[event.index] ?? "") + event.delta.text;
+					else plainText = false;
+					break;
+				case "message_delta":
+					if (!message) break;
+					message.stop_reason = event.delta.stop_reason;
+					message.stop_sequence = event.delta.stop_sequence;
+					// Delta usage is cumulative; fields it leaves null or absent keep their start values.
+					message.usage = {
+						...message.usage,
+						...Object.fromEntries(
+							Object.entries(event.usage).filter(
+								([, v]) => typeof v === "number",
+							),
+						),
+					};
+					break;
+				case "message_stop":
+					stopped = true;
+					break;
+			}
+		},
+		result(): Message | null {
+			if (!message || !stopped || !plainText) return null;
+			return {
+				...message,
+				content: texts.map((text) => ({ type: "text", text, citations: null })),
+			};
+		},
+	};
+}
+
+/** The event sequence MessageStream expects, for a finished all-text message. */
+async function* replayEvents(
+	message: Message,
+): AsyncGenerator<RawMessageStreamEvent> {
+	yield {
+		type: "message_start",
+		message: {
+			...message,
+			content: [],
+			stop_reason: null,
+			stop_sequence: null,
+			usage: { ...message.usage, output_tokens: 0 },
+		},
+	};
+	for (const [index, block] of message.content.entries()) {
+		if (block.type !== "text") continue;
+		yield {
+			type: "content_block_start",
+			index,
+			content_block: { type: "text", text: "", citations: null },
+		};
+		yield {
+			type: "content_block_delta",
+			index,
+			delta: { type: "text_delta", text: block.text },
+		};
+		yield { type: "content_block_stop", index };
+	}
+	yield {
+		type: "message_delta",
+		delta: {
+			stop_reason: message.stop_reason,
+			stop_sequence: message.stop_sequence,
+			container: null,
+			stop_details: null,
+		},
+		usage: {
+			output_tokens: message.usage.output_tokens,
+			input_tokens: null,
+			cache_creation_input_tokens: null,
+			cache_read_input_tokens: null,
+			output_tokens_details: null,
+			server_tool_use: null,
+		},
+	};
+	yield { type: "message_stop" };
+}
+
 /**
  * Wraps an Anthropic client so non-streaming `messages.create` calls go through `cache`.
  * Streaming (including `messages.stream()`) and every other method reach the SDK untouched.
@@ -87,8 +186,14 @@ export function withCache<T extends Anthropic>(
 		body: MessageCreateParamsBase,
 		requestOptions?: RequestOptions,
 	) => {
-		if (body.stream) return original(body, requestOptions);
 		const { model, messages: history, ...rest } = body;
+		if (body.stream) {
+			return createStream(body, requestOptions, {
+				model,
+				messages: history,
+				params: without(rest, NON_SEMANTIC),
+			});
+		}
 		return cache.wrap(
 			() => original(body, requestOptions) as Promise<Message>,
 			{
@@ -102,6 +207,41 @@ export function withCache<T extends Anthropic>(
 			},
 		);
 	};
+
+	async function createStream(
+		body: MessageCreateParamsBase,
+		requestOptions: RequestOptions | undefined,
+		key: KeyInput,
+	): Promise<Stream<RawMessageStreamEvent>> {
+		const handle = await cache.lookup<Message>(key, options);
+		if (handle.hit) {
+			const message = handle.hit.response;
+			return new Stream(
+				() => replayEvents(message),
+				new AbortController(),
+				client,
+			);
+		}
+		const source = (await original(
+			body,
+			requestOptions,
+		)) as Stream<RawMessageStreamEvent>;
+		const assembled = assembler();
+		const iterate = () =>
+			tap(source, source.controller.signal, assembled.add, () => {
+				const message = assembled.result();
+				if (message && isPlainAnswer(message)) {
+					handle.store(message, {
+						usage: {
+							input: inputTokens(message),
+							output: message.usage.output_tokens,
+						},
+					});
+				}
+			});
+		// Same controller as the SDK's stream, so abort() still cancels the request.
+		return new Stream(iterate, source.controller, client);
+	}
 
 	return override(
 		client,

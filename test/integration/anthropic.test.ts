@@ -145,15 +145,6 @@ describe("withCache for Anthropic", () => {
 		expect(create).toHaveBeenCalledTimes(4);
 	});
 
-	it("should bypass the cache for streaming", async () => {
-		const { ai, create } = await setup();
-
-		await ai.messages.create({ ...body, stream: true } as never);
-		await ai.messages.create({ ...body, stream: true } as never);
-
-		expect(create).toHaveBeenCalledTimes(2);
-	});
-
 	it.each([
 		[
 			"tool use",

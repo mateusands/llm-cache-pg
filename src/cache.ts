@@ -105,6 +105,11 @@ export interface CachedResponse<R> {
 export interface Cache {
 	/** Returns a cached answer for `key`, or calls `fn` and stores what it returns. `R` must be JSON. */
 	wrap<R>(fn: () => Promise<R>, options: WrapOptions<R>): Promise<R>;
+	/**
+	 * Looks up `key` and returns a handle whose `store` saves the answer after a miss, reusing the
+	 * lookup's embedding. For responses that only exist later, such as streams.
+	 */
+	lookup<R>(key: KeyInput, options?: CallOptions): Promise<LookupHandle<R>>;
 	/** Looks up without calling anything. Null on a miss, a bypass or an internal failure. */
 	get<R>(
 		key: KeyInput,
@@ -125,6 +130,15 @@ export interface Cache {
 	 * request, in `namespace` (default `default`). Throws without a filter or on failure.
 	 */
 	invalidate(filter: InvalidateFilter): Promise<number>;
+}
+
+export interface LookupHandle<R> {
+	hit: CachedResponse<R> | null;
+	/**
+	 * Stores the answer in the background (see `flush`). A no-op after a hit, a bypass, a failed
+	 * lookup or a previous call.
+	 */
+	store(response: R, options?: { usage?: Usage }): void;
 }
 
 export interface InvalidateFilter {
@@ -154,7 +168,7 @@ interface Setup {
 	embeddingOptional: boolean;
 }
 
-interface Lookup<R> {
+interface Found<R> {
 	hit: CachedResponse<R> | null;
 	/** Both set when the entry can be stored after the model answers; null means no embedding. */
 	embedding?: number[] | null;
@@ -317,11 +331,11 @@ export function createCache(options: CacheOptions): Cache {
 		};
 	}
 
-	async function lookup<R>(
+	async function find<R>(
 		key: CacheKey,
 		namespace: string,
 		mode: Mode,
-	): Promise<Lookup<R>> {
+	): Promise<Found<R>> {
 		const durations: Durations = {};
 		const miss = (similarity?: number) =>
 			emit({
@@ -334,7 +348,7 @@ export function createCache(options: CacheOptions): Cache {
 			match: Match,
 			result: CachedResponse<R>["result"],
 			s: Setup,
-		): Lookup<R> => {
+		): Found<R> => {
 			emit({
 				result,
 				namespace,
@@ -445,7 +459,7 @@ export function createCache(options: CacheOptions): Cache {
 				return fn();
 			}
 
-			const found = await lookup<R>(key, namespace, mode);
+			const found = await find<R>(key, namespace, mode);
 			if (found.hit) return found.hit.response;
 
 			const response = await fn();
@@ -469,6 +483,40 @@ export function createCache(options: CacheOptions): Cache {
 			return response;
 		},
 
+		async lookup<R>(
+			keyInput: KeyInput,
+			callOptions?: CallOptions,
+		): Promise<LookupHandle<R>> {
+			const namespace = resolveNamespace(callOptions?.namespace);
+			const mode = resolveMode(callOptions);
+			if (callOptions?.ttl !== undefined) parseTtl(callOptions.ttl);
+			const key = deriveKey(keyInput);
+			if (!key) {
+				emit({ result: "bypass", namespace, durations: {} });
+				return { hit: null, store: () => {} };
+			}
+			const found = await find<R>(key, namespace, mode);
+			let stored = false;
+			return {
+				hit: found.hit,
+				store(response, storeOptions) {
+					if (stored || !found.setup || found.embedding === undefined) return;
+					stored = true;
+					background(
+						store(
+							found.setup,
+							namespace,
+							key,
+							found.embedding,
+							response,
+							callOptions?.ttl,
+							storeOptions?.usage,
+						),
+					);
+				},
+			};
+		},
+
 		async get<R>(
 			keyInput: KeyInput,
 			callOptions?: CallOptions,
@@ -479,7 +527,7 @@ export function createCache(options: CacheOptions): Cache {
 				emit({ result: "bypass", namespace, durations: {} });
 				return null;
 			}
-			return (await lookup<R>(key, namespace, resolveMode(callOptions))).hit;
+			return (await find<R>(key, namespace, resolveMode(callOptions))).hit;
 		},
 
 		async set<R>(
