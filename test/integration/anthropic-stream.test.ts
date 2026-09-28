@@ -172,6 +172,21 @@ describe("withCache for Anthropic, streaming", () => {
 		expect(create).toHaveBeenCalledTimes(2);
 	});
 
+	it("should stop replaying a cached stream once it is aborted", async () => {
+		const { ai, cache } = await setup();
+		await drain(await ai.messages.create(body));
+		await cache.flush();
+
+		const replay = await ai.messages.create(body);
+		const seen: unknown[] = [];
+		for await (const event of replay) {
+			seen.push(event);
+			replay.controller.abort();
+		}
+
+		expect(seen).toHaveLength(1);
+	});
+
 	it("should pass a mid-stream error to the caller and store nothing", async () => {
 		const { ai, cache, create } = await setup(() => sdkStream(events(), 3));
 

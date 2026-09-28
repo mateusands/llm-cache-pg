@@ -11,7 +11,7 @@ import type {
 } from "@anthropic-ai/sdk/resources/messages";
 import type { Cache, CallOptions } from "./cache.ts";
 import type { KeyInput } from "./key.ts";
-import { override, tap, without } from "./provider.ts";
+import { override, tap, untilAborted, without } from "./provider.ts";
 
 type RequestOptions = Anthropic.RequestOptions;
 
@@ -216,9 +216,10 @@ export function withCache<T extends Anthropic>(
 		const handle = await cache.lookup<Message>(key, options);
 		if (handle.hit) {
 			const message = handle.hit.response;
+			const controller = new AbortController();
 			return new Stream(
-				() => replayEvents(message),
-				new AbortController(),
+				() => untilAborted(replayEvents(message), controller.signal),
+				controller,
 				client,
 			);
 		}

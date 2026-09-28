@@ -11,7 +11,7 @@ import type {
 } from "openai/resources/chat/completions";
 import type { Cache, CallOptions, Embedder } from "./cache.ts";
 import type { KeyInput } from "./key.ts";
-import { override, tap, without } from "./provider.ts";
+import { override, tap, untilAborted, without } from "./provider.ts";
 
 type RequestOptions = OpenAI.RequestOptions;
 
@@ -236,9 +236,14 @@ export function withCache<T extends OpenAI>(
 		if (handle.hit) {
 			const completion = handle.hit.response;
 			const includeUsage = Boolean(body.stream_options?.include_usage);
+			const controller = new AbortController();
 			return new Stream(
-				() => replayChunks(completion, includeUsage),
-				new AbortController(),
+				() =>
+					untilAborted(
+						replayChunks(completion, includeUsage),
+						controller.signal,
+					),
+				controller,
 				client,
 			);
 		}

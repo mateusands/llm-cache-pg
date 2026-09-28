@@ -42,3 +42,14 @@ export async function* tap<T>(
 	}
 	if (!signal.aborted) onEnd();
 }
+
+/** Yields `source` until `signal` aborts. A replay has no request to cancel, so it checks itself. */
+export async function* untilAborted<T>(
+	source: AsyncIterable<T>,
+	signal: AbortSignal,
+): AsyncGenerator<T> {
+	for await (const item of source) {
+		if (signal.aborted) return;
+		yield item;
+	}
+}

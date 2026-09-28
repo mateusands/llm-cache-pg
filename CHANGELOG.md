@@ -4,6 +4,10 @@ All notable changes to this project. The format follows [Keep a Changelog](https
 
 ## [Unreleased]
 
+### Fixed
+
+- Aborting a stream replayed from the cache did not stop it: the replay ran to the end.
+
 ## [0.4.0] - 2026-09-28
 
 ### Added

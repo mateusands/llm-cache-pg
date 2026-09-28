@@ -236,6 +236,21 @@ describe("withCache for OpenAI, streaming", () => {
 		expect(create).toHaveBeenCalledTimes(2);
 	});
 
+	it("should stop replaying a cached stream once it is aborted", async () => {
+		const { ai, cache } = await setup();
+		await drain(await ai.chat.completions.create(body));
+		await cache.flush();
+
+		const replay = await ai.chat.completions.create(body);
+		const seen: unknown[] = [];
+		for await (const chunk of replay) {
+			seen.push(chunk);
+			replay.controller.abort();
+		}
+
+		expect(seen).toHaveLength(1);
+	});
+
 	it("should pass a mid-stream error to the caller and store nothing", async () => {
 		const { ai, cache, create } = await setup(() => sdkStream(chunks(), 2));
 
