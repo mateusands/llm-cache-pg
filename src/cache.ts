@@ -6,6 +6,8 @@ import {
 } from "./migrate.ts";
 import { type Pool, TimeoutError, withClient } from "./pg.ts";
 import {
+	deleteExpired,
+	deleteMatching,
 	findExact,
 	findNearest,
 	insertEntry,
@@ -35,6 +37,16 @@ export interface LookupEvent {
 	namespace: string;
 	/** Best cosine similarity found; absent when no semantic lookup ran. */
 	similarity?: number;
+	/** Milliseconds per stage that ran; a stage that was skipped is absent. */
+	durations: Durations;
+	/** Token counts stored with the entry, on a hit. */
+	tokens?: { input: number | null; output: number | null };
+}
+
+export interface Durations {
+	exact?: number;
+	embed?: number;
+	semantic?: number;
 }
 
 export interface CacheOptions {
@@ -100,6 +112,19 @@ export interface Cache {
 	): Promise<void>;
 	/** Waits for background writes (stores, hit counts). Call before closing the pool. */
 	flush(): Promise<void>;
+	/** Deletes expired entries and returns how many. Throws on failure. */
+	prune(options?: { batchSize?: number }): Promise<number>;
+	/**
+	 * Deletes the entries matching every given filter and returns how many. `key` targets one exact
+	 * request, in `namespace` (default `default`). Throws without a filter or on failure.
+	 */
+	invalidate(filter: InvalidateFilter): Promise<number>;
+}
+
+export interface InvalidateFilter {
+	namespace?: string;
+	model?: string;
+	key?: KeyInput;
 }
 
 // Writes run in the background and can wait on HNSW index maintenance.
@@ -251,56 +276,81 @@ export function createCache(options: CacheOptions): Cache {
 		key: CacheKey,
 		namespace: string,
 	): Promise<Lookup<R>> {
+		const durations: Durations = {};
+		const miss = (similarity?: number) =>
+			emit({
+				result: "miss",
+				namespace,
+				durations,
+				...(similarity === undefined ? {} : { similarity }),
+			});
+		const hit = (
+			match: Match,
+			result: CachedResponse<R>["result"],
+			s: Setup,
+		): Lookup<R> => {
+			emit({
+				result,
+				namespace,
+				similarity: match.similarity,
+				durations,
+				tokens: { input: match.tokensIn, output: match.tokensOut },
+			});
+			return { hit: hitFrom<R>(match, result, s) };
+		};
+		const timed = async <T>(
+			stage: keyof Durations,
+			work: () => Promise<T>,
+		): Promise<T> => {
+			const started = performance.now();
+			try {
+				return await work();
+			} finally {
+				durations[stage] = performance.now() - started;
+			}
+		};
+
 		let s: Setup;
 		try {
 			s = await ensureSetup();
 		} catch (error) {
 			report(error, "setup");
-			emit({ result: "miss", namespace });
+			miss();
 			return { hit: null };
 		}
 
 		try {
-			const exact = await findExact(pool, s.config, namespace, key);
-			if (exact) {
-				emit({ result: "exact_hit", namespace, similarity: 1 });
-				return { hit: hitFrom<R>(exact, "exact_hit", s) };
-			}
+			const exact = await timed("exact", () =>
+				findExact(pool, s.config, namespace, key),
+			);
+			if (exact) return hit(exact, "exact_hit", s);
 		} catch (error) {
 			// The database is unhealthy; skip the embedding and the write, both would fail too.
 			report(error, "exact");
-			emit({ result: "miss", namespace });
+			miss();
 			return { hit: null };
 		}
 
 		let embedding: number[];
 		try {
-			embedding = await embedText(key.text, s.dimensions);
+			embedding = await timed("embed", () => embedText(key.text, s.dimensions));
 		} catch (error) {
 			report(error, "embed");
-			emit({ result: "miss", namespace });
+			miss();
 			return { hit: null };
 		}
 
 		let nearest: Match | null = null;
 		try {
-			nearest = await findNearest(pool, s.config, namespace, key, embedding);
+			nearest = await timed("semantic", () =>
+				findNearest(pool, s.config, namespace, key, embedding),
+			);
 		} catch (error) {
 			report(error, "semantic");
 		}
-		if (nearest && nearest.similarity >= threshold) {
-			emit({
-				result: "semantic_hit",
-				namespace,
-				similarity: nearest.similarity,
-			});
-			return { hit: hitFrom<R>(nearest, "semantic_hit", s) };
-		}
-		emit({
-			result: "miss",
-			namespace,
-			...(nearest ? { similarity: nearest.similarity } : {}),
-		});
+		if (nearest && nearest.similarity >= threshold)
+			return hit(nearest, "semantic_hit", s);
+		miss(nearest?.similarity);
 		return { hit: null, embedding, setup: s };
 	}
 
@@ -337,7 +387,7 @@ export function createCache(options: CacheOptions): Cache {
 			if (wrapOptions.ttl !== undefined) parseTtl(wrapOptions.ttl);
 			const key = deriveKey(wrapOptions.key);
 			if (!key) {
-				emit({ result: "bypass", namespace });
+				emit({ result: "bypass", namespace, durations: {} });
 				return fn();
 			}
 
@@ -372,7 +422,7 @@ export function createCache(options: CacheOptions): Cache {
 			const namespace = resolveNamespace(callOptions?.namespace);
 			const key = deriveKey(keyInput);
 			if (!key) {
-				emit({ result: "bypass", namespace });
+				emit({ result: "bypass", namespace, durations: {} });
 				return null;
 			}
 			return (await lookup<R>(key, namespace)).hit;
@@ -405,6 +455,38 @@ export function createCache(options: CacheOptions): Cache {
 
 		async flush(): Promise<void> {
 			await Promise.all(pending);
+		},
+
+		prune(pruneOptions?: { batchSize?: number }): Promise<number> {
+			const batchSize = positiveInteger(
+				"batchSize",
+				pruneOptions?.batchSize ?? 1000,
+			);
+			return deleteExpired(pool, table, batchSize);
+		},
+
+		async invalidate(filter: InvalidateFilter): Promise<number> {
+			if (
+				filter.namespace === undefined &&
+				filter.model === undefined &&
+				!filter.key
+			) {
+				throw new Error("invalidate() needs a filter: namespace, model or key");
+			}
+			let key: CacheKey | undefined;
+			if (filter.key) {
+				key = deriveKey(filter.key) ?? undefined;
+				if (!key)
+					throw new Error("invalidate() got a key that is never cacheable");
+			}
+			const namespace = key
+				? resolveNamespace(filter.namespace)
+				: filter.namespace;
+			return deleteMatching(pool, table, {
+				...(namespace !== undefined ? { namespace } : {}),
+				...(filter.model !== undefined ? { model: filter.model } : {}),
+				...(key ? { key } : {}),
+			});
 		},
 	};
 }

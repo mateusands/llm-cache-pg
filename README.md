@@ -2,9 +2,9 @@
 
 [Português](README.pt-BR.md)
 
-**Semantic cache for LLM calls in TypeScript, backed by plain PostgreSQL + pgvector.** Runs on any Postgres that has pgvector (RDS, Supabase, Neon, self-hosted) with no custom extension to install. Wraps your OpenAI or Anthropic call in one line, isolates data per tenant, and exports Prometheus metrics with a ready-made Grafana dashboard.
+**Semantic cache for LLM calls in TypeScript, backed by plain PostgreSQL + pgvector.** Runs on any Postgres that has pgvector (RDS, Supabase, Neon, self-hosted) with no custom extension to install. Wraps your OpenAI or Anthropic call in one line, isolates data per tenant, and exports Prometheus metrics.
 
-> **Status: v0.1, not yet on npm.** Core cache, OpenAI wrapper and migration are implemented and tested against real Postgres. Anthropic, metrics and the Grafana dashboard come next (see [Roadmap](#roadmap)). The API may still change before 1.0.
+> **Status: v0.2, not yet on npm.** Core cache, OpenAI and Anthropic wrappers, migration, cleanup, Prometheus metrics and a benchmark are implemented and tested against real Postgres. The Grafana dashboard comes next (see [Roadmap](#roadmap)). The API may still change before 1.0.
 
 ---
 
@@ -24,20 +24,21 @@ Existing options don't fit a typical TypeScript + Postgres stack:
 
 `llm-cache-pg` lives in your app, uses the Postgres you already run, and only needs the `vector` extension, which managed providers already allow.
 
-**Requirements:** Node 22+, PostgreSQL with pgvector 0.8+ (older pgvector works, with weaker semantic lookups in busy namespaces). No runtime dependencies: you bring the `pg` pool and, optionally, the `openai` client.
+**Requirements:** Node 22+, PostgreSQL with pgvector 0.8+ (older pgvector works, with weaker semantic lookups in busy namespaces). No runtime dependencies: you bring the `pg` pool and, optionally, the `openai` client. CI runs the integration suite on pgvector 0.8.6 / Postgres 18, 0.8.0 / Postgres 13 and 0.7.4 / Postgres 17.
 
 ## Features
 
 - **Exact + semantic lookup:** hash match first (free), vector similarity second.
-- **One-line wrapper** for the OpenAI SDK, plus a generic `cache.wrap(fn)`.
+- **One-line wrappers** for the OpenAI and Anthropic SDKs, plus a generic `cache.wrap(fn)`.
 - **Safe cache keys:** the whole request is part of the key except the last user message, which is the only part compared by vector. Model, system prompt, earlier turns, temperature, tools and any field the SDK adds later all have to match exactly.
 - **Fail-open:** if the database or the embedder is down or slow, your call goes straight to the model and the error goes to `onError`.
 - **Multi-tenant** via `namespace`: no cross-tenant hits.
-- **TTL** per cache or per call; an expired key is cached again on its next miss.
+- **TTL** per cache or per call, `prune()` for expired entries and `invalidate()` by namespace, model or key.
+- **Prometheus metrics** through `llm-cache-pg/prometheus`, with either `@prometheus-io/client` or `prom-client`.
 - **Bring your own embedder:** OpenAI embeddings built in, or any `(text, { signal }) => Promise<number[]>`.
 - **Migration** as a function or as plain SQL for your own migration tool, with an HNSW index.
 
-Planned: Anthropic wrapper, invalidation API, Prometheus metrics and a Grafana dashboard.
+Planned: a Grafana dashboard.
 
 ## Quick start
 
@@ -63,6 +64,8 @@ const cache = createCache({
 const ai = withCache(openai, cache, { namespace: tenantId });
 const res = await ai.chat.completions.create({ model: "gpt-4.1-mini", messages });
 
+// Same for Anthropic: import { withCache } from "llm-cache-pg/anthropic"
+
 // Option 2: wrap any call whose result is JSON
 const answer = await cache.wrap(() => callSomeModel(messages), {
   namespace: tenantId,
@@ -78,11 +81,11 @@ A runnable version is in [examples/openai-basic](examples/openai-basic/index.ts)
 
 ## What is never cached
 
-- Streaming, `n > 1` and audio requests: passed straight to the SDK.
+- Streaming (including Anthropic's `messages.stream()`), `n > 1` and audio requests: passed straight to the SDK.
 - Requests whose last message isn't from the user, or has non-text parts such as images.
-- Responses with tool calls or a `finish_reason` other than `stop`.
+- Responses with tool calls, or that didn't finish normally (`finish_reason` other than `stop`; `stop_reason` other than `end_turn` or `stop_sequence`).
 
-With the OpenAI wrapper, a cached answer comes back as a plain `Promise<ChatCompletion>`, so `.withResponse()` isn't available on non-streaming calls.
+With either wrapper, a cached answer comes back as a plain Promise, so `.withResponse()` isn't available on non-streaming calls. With Anthropic, stored token counts include prompt-cache reads and writes.
 
 ## Choosing a threshold
 
@@ -97,6 +100,27 @@ Measured with `text-embedding-3-small` (cosine similarity):
 | "How do I reset my password?" / "How do I cancel my subscription?" | 0.468 |
 
 A look-alike question with a different answer can score higher than a real paraphrase, so no threshold catches loose rewording without also serving wrong answers. The default of 0.92 only accepts close rewording. Lower it only after measuring on your own traffic.
+
+## Benchmark
+
+1000 question pairs from [Quora Question Pairs](https://huggingface.co/datasets/nyu-mll/glue) (validation split, 326 labelled duplicates), run through the library against Postgres 18 + pgvector 0.8.6. Each pair's first question is stored, then the second one is looked up. **Hit rate** is the share of duplicate pairs answered from the cache; **false-hit rate** is the share of served answers whose pair is labelled *not* a duplicate.
+
+| Threshold | Hit rate (3-small) | False-hit rate (3-small) | Hit rate (3-large, 2000 dims) | False-hit rate (3-large) |
+| --- | --- | --- | --- | --- |
+| 0.85 | 46.3% (151) | 24.0% (53) | 47.5% (155) | 18.8% (39) |
+| 0.90 | 29.1% (95) | 20.3% (26) | 25.2% (82) | 21.0% (22) |
+| **0.92** (default) | **20.6% (67)** | **19.5% (17)** | **20.6% (67)** | **15.0% (12)** |
+| 0.94 | 14.7% (48) | 14.3% (8) | 14.1% (46) | 14.8% (8) |
+| 0.96 | 8.0% (26) | 10.3% (3) | 6.7% (22) | 12.0% (3) |
+
+How to read it:
+
+- The false-hit rate is an upper bound. Quora's labels are noisy: of 8 "false hits" above 0.94 checked by hand, about half were really the same question ("What brand of socks is this?" / "…are these?"). The rest were real wrong answers, such as "How do I migrate my **Clash Royale** account…" served for "…my **Clash of Clans** account…" at 0.956.
+- A look-alike question can score as high as a real paraphrase, so raising the threshold lowers false hits slowly while hits drop fast. Semantic hits pay off on narrow, repetitive traffic (support, FAQ) where you can check the answers; on open-ended questions, rely on exact hits.
+- On a small hand-written support set (`bench/data/faq.json`, 10 paraphrases and 10 look-alikes per language), the default 0.92 answered 1/10 English paraphrases with 3-small and 0/10 with 3-large, 0/10 Portuguese ones with either, and served none of the 20 look-alikes. Illustrative only, given the size.
+- Lookup cost on a warm local database: exact p50 0.4 ms, semantic p50 1.3 ms / p95 1.8 ms with 1536 dimensions (7.8 / 9.3 ms with 2000).
+
+Reproduce with `pnpm bench` (needs Docker and `OPENAI_API_KEY`; embeddings are cached in `bench/.cache`). Raw results are in [bench/results](bench/results). The Quora data is downloaded, not redistributed.
 
 ## Options
 
@@ -113,6 +137,37 @@ A look-alike question with a different answer can score higher than a real parap
 | `onError` | `console.warn` | `(error, stage)`, never receives prompt or response text |
 | `onLookup` | none | `({ result, namespace, similarity })` for each lookup |
 
+## Metrics
+
+```ts
+import * as client from "@prometheus-io/client"; // or "prom-client"
+import { prometheusHooks } from "llm-cache-pg/prometheus";
+
+const cache = createCache({ pool, embed, ...prometheusHooks({ client, pool }) });
+```
+
+| Metric | Type | Labels |
+| --- | --- | --- |
+| `llm_cache_requests_total` | counter | `result`: exact_hit, semantic_hit, miss, bypass; `namespace` if `namespaceLabel: true` |
+| `llm_cache_tokens_saved_total` | counter | `direction`: in, out |
+| `llm_cache_lookup_duration_seconds` | histogram | `stage`: exact, embed, semantic |
+| `llm_cache_similarity` | histogram | none; best score of each semantic lookup |
+| `llm_cache_errors_total` | counter | `stage` |
+| `llm_cache_entries` | gauge | `table`; from Postgres statistics, only when `pool` is given |
+
+The hooks replace `onError`, so errors are counted instead of logged; wrap them if you want both. The namespace label is off by default, since one series per tenant can overload Prometheus.
+
+## Cleaning up
+
+```ts
+await cache.prune();                              // delete expired entries, in batches of 1000
+await cache.invalidate({ namespace: tenantId });  // everything for one tenant
+await cache.invalidate({ model: "gpt-4.1-mini" }); // after a model upgrade
+await cache.invalidate({ key: { model, messages }, namespace: tenantId }); // one bad answer
+```
+
+Run `prune()` on a schedule when you use a TTL; expired entries are never served, but they stay in the table until then. Both calls throw on failure, unlike lookups. After deleting many rows, a `VACUUM` lets Postgres reuse the space in the HNSW index.
+
 ## Using your own migration tool
 
 `renderMigrationSql({ table, dimensions })` returns the idempotent SQL that `migrate()` runs, to paste into Prisma, Drizzle or Flyway migrations.
@@ -123,13 +178,17 @@ A look-alike question with a different answer can score higher than a real parap
 pnpm install
 pnpm test            # unit + integration; integration starts pgvector in Docker via Testcontainers
 pnpm test:consumer   # packs the library and installs it into a fresh project
+PGVECTOR_IMAGE=pgvector/pgvector:0.7.4-pg17 pnpm test:integration  # another pgvector/Postgres
+pnpm bench           # benchmark (Docker + OPENAI_API_KEY)
 ```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
 
 ## Roadmap
 
 - [x] v0.1: core lookup/store, OpenAI wrapper, SQL migration, tests against real Postgres
-- [ ] v0.2: Anthropic wrapper, TTL/invalidation API, Prometheus metrics
-- [ ] v0.3: Grafana dashboard, benchmark with published numbers
+- [x] v0.2: Anthropic wrapper, prune/invalidate, Prometheus metrics, pgvector version matrix, benchmark
+- [ ] v0.3: Grafana dashboard, npm release
 - [ ] later: streaming responses, per-namespace thresholds, admin CLI
 
 ## License

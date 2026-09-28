@@ -5,7 +5,7 @@
 import pg from "pg";
 import { describe, expect, it, onTestFinished } from "vitest";
 import { migrate } from "../../src/migrate.ts";
-import { testPool, uniqueTable } from "./db.ts";
+import { iterativeScan, pgvectorVersion, testPool, uniqueTable } from "./db.ts";
 
 const pool = testPool();
 
@@ -35,8 +35,10 @@ describe("migrate", () => {
 			`SELECT version FROM ${table}_migrations`,
 		);
 		expect(rows).toEqual([{ version: 1 }]);
-		expect(result.pgvectorVersion).toBe("0.8.6");
-		expect(result.warnings).toEqual([]);
+		expect(result.pgvectorVersion).toBe(pgvectorVersion);
+		expect(result.warnings).toEqual(
+			iterativeScan ? [] : [expect.stringContaining("Upgrade to 0.8.0")],
+		);
 	});
 
 	it("should be a no-op when run again", async () => {

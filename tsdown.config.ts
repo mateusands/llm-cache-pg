@@ -1,7 +1,12 @@
 import { defineConfig } from "tsdown";
 
 export default defineConfig({
-	entry: ["src/index.ts", "src/openai.ts"],
+	entry: [
+		"src/index.ts",
+		"src/openai.ts",
+		"src/anthropic.ts",
+		"src/prometheus.ts",
+	],
 	format: ["esm", "cjs"],
 	platform: "node",
 	target: "node22",

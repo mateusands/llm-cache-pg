@@ -18,5 +18,5 @@
 			"llm-cache-pg/openai": ["./src/openai.ts"]
 		}
 	},
-	"include": ["src", "test", "examples", "*.config.ts"]
+	"include": ["src", "test", "examples", "bench", "*.config.ts"]
 }
