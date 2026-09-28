@@ -87,7 +87,7 @@ Uma versão executável está em [examples/openai-basic](examples/openai-basic/i
 
 ## O que nunca é cacheado
 
-- Os helpers de stream dos SDKs (`chat.completions.stream()`, `messages.stream()`), `n > 1` e áudio: vão direto para o SDK. O `create({ stream: true })` é cacheado (veja abaixo).
+- `n > 1` e áudio: vão direto para o SDK.
 - Requisições cuja última mensagem não é do usuário ou tem partes que não são texto, como imagens.
 - Respostas com tool calls, ou que não terminaram normalmente (`finish_reason` diferente de `stop`; `stop_reason` diferente de `end_turn` ou `stop_sequence`).
 
@@ -95,11 +95,12 @@ Nos dois wrappers, os resultados voltam como Promises comuns, então `.withRespo
 
 ### Streaming
 
-O `create({ stream: true })` também passa pelo cache. Num miss, você recebe o stream do SDK intacto, e a resposta é gravada quando o stream termina normalmente. Num hit, você recebe um `Stream` de verdade do SDK que reproduz a resposta gravada, então `for await`, `tee()` e `toReadableStream()` funcionam como sempre.
+O `create({ stream: true })` e os helpers dos SDKs, `chat.completions.stream()` e `messages.stream()`, também passam pelo cache. Num miss, você recebe o stream do SDK intacto, e a resposta é gravada quando o stream termina normalmente. Num hit, você recebe um `Stream` de verdade do SDK que reproduz a resposta gravada, então `for await`, `tee()` e `toReadableStream()` funcionam como sempre.
 
-- Nada é gravado se o stream for abortado, der erro, for interrompido, chamar tools ou (por enquanto) tiver algo além de texto. Parar de ler com `break` conta como interrompido, inclusive um `break` no chunk final.
+- Nada é gravado se o stream for abortado, der erro, for interrompido ou chamar tools. Streams da Anthropic com thinking, redacted thinking ou citações são gravados e reproduzidos bloco a bloco; streams com tools de servidor (web search, execução de código) não são, embora a mesma resposta sem stream seja. Parar de ler com `break` conta como interrompido, inclusive um `break` no chunk final.
 - Pedidos com e sem stream são cacheados separadamente.
 - A reprodução manda a resposta inteira num único chunk de conteúdo, e não token a token.
+- Numa resposta do cache pelo `messages.stream()` da Anthropic, o `request_id` é nulo e o `withResponse()` do helper lança erro: não existe resposta HTTP por trás.
 
 ## Escolhendo o threshold
 
@@ -205,6 +206,20 @@ await cache.invalidate({ key: { model, messages }, namespace: tenantId }); // um
 
 Rode o `prune()` periodicamente se usar TTL: entradas expiradas nunca são servidas, mas ficam na tabela até lá. As duas chamadas lançam erro se falharem, ao contrário das buscas. Depois de apagar muitas linhas, um `VACUUM` deixa o Postgres reaproveitar o espaço do índice HNSW.
 
+### Pela linha de comando
+
+As mesmas operações, mais estatísticas, sem escrever script (precisa do `pg` instalado; a conexão vem do `DATABASE_URL` ou do `--url`):
+
+```sh
+npx llm-cache-pg migrate --dimensions 1536
+npx llm-cache-pg stats            # entradas, expiradas, hits, tamanho, principais namespaces e modelos; --json para scripts
+npx llm-cache-pg prune
+npx llm-cache-pg invalidate --namespace tenant-a         # dry run: mostra quantas entradas apagaria
+npx llm-cache-pg invalidate --namespace tenant-a --yes   # apaga
+```
+
+Todo comando aceita `--table`. Códigos de saída: 0 em sucesso, 1 em falha, 2 em uso inválido. A URL de conexão nunca é impressa.
+
 ## Usando sua própria ferramenta de migração
 
 `renderMigrationSql({ table, dimensions })` devolve o SQL idempotente que o `migrate()` executa, para colar em migrações do Prisma, Drizzle ou Flyway.
@@ -227,7 +242,8 @@ Leia o [CONTRIBUTING.md](CONTRIBUTING.md) (em inglês) antes de abrir um pull re
 - [x] v0.2: wrapper da Anthropic, prune/invalidate, métricas para o Prometheus, matriz de versões do pgvector, benchmark
 - [x] v0.3: dashboard do Grafana, demo de métricas, publicação no npm
 - [x] v0.4: respostas com streaming, threshold por chamada, modo só exato
-- [ ] depois: CLI de administração, cache dos helpers `.stream()` dos SDKs, streams com conteúdo além de texto
+- [x] v0.5: helpers `.stream()` dos SDKs, streams com thinking e citações, CLI de administração
+- [ ] depois: streams com tools de servidor, `cache.stats()` na API
 
 ## Licença
 

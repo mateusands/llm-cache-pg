@@ -1,7 +1,11 @@
 import type OpenAI from "openai";
 import type { APIPromise } from "openai/core/api-promise";
-// The one runtime import: cached streams are replayed as the SDK's own Stream class.
+// Runtime imports: cached streams replay as the SDK's own Stream, and its stream() helper is reused.
 import { Stream } from "openai/core/streaming";
+import {
+	ChatCompletionStream,
+	type ChatCompletionStreamParams,
+} from "openai/lib/ChatCompletionStream";
 import type {
 	ChatCompletion,
 	ChatCompletionChunk,
@@ -11,7 +15,7 @@ import type {
 } from "openai/resources/chat/completions";
 import type { Cache, CallOptions, Embedder } from "./cache.ts";
 import type { KeyInput } from "./key.ts";
-import { override, tap, without } from "./provider.ts";
+import { override, tap, untilAborted, without } from "./provider.ts";
 
 type RequestOptions = OpenAI.RequestOptions;
 
@@ -190,8 +194,9 @@ async function* replayChunks(
 }
 
 /**
- * Wraps an OpenAI client so non-streaming `chat.completions.create` calls go through `cache`.
- * Streaming, `n > 1` and audio requests, and every other method, reach the SDK untouched.
+ * Wraps an OpenAI client so `chat.completions.create` (streaming or not) and
+ * `chat.completions.stream()` go through `cache`. `n > 1` and audio requests, and every other
+ * method, reach the SDK untouched.
  */
 export function withCache<T extends OpenAI>(
 	client: T,
@@ -235,10 +240,22 @@ export function withCache<T extends OpenAI>(
 		const handle = await cache.lookup<ChatCompletion>(key, options);
 		if (handle.hit) {
 			const completion = handle.hit.response;
+			const signal = requestOptions?.signal;
 			const includeUsage = Boolean(body.stream_options?.include_usage);
+			const controller = new AbortController();
+			// The caller's signal (the stream() helper passes one) has to stop the replay too.
+			if (signal?.aborted) controller.abort();
+			else
+				signal?.addEventListener("abort", () => controller.abort(), {
+					once: true,
+				});
 			return new Stream(
-				() => replayChunks(completion, includeUsage),
-				new AbortController(),
+				() =>
+					untilAborted(
+						replayChunks(completion, includeUsage),
+						controller.signal,
+					),
+				controller,
 				client,
 			);
 		}
@@ -263,10 +280,20 @@ export function withCache<T extends OpenAI>(
 		return new Stream(iterate, source.controller, client);
 	}
 
-	const chat = override(
-		client.chat,
-		"completions",
-		override(completions, "create", create),
-	);
-	return override(client, "chat", chat) as unknown as CachedOpenAI<T>;
+	// The SDK's helper calls client.chat.completions.create, so it is handed the wrapped client.
+	const stream = (
+		body: ChatCompletionStreamParams,
+		requestOptions?: RequestOptions,
+	) =>
+		ChatCompletionStream.createChatCompletion(
+			cached as unknown as OpenAI,
+			body,
+			requestOptions,
+		);
+
+	const chat = override(client.chat, {
+		completions: override(completions, { create, stream }),
+	});
+	const cached = override(client, { chat }) as unknown as CachedOpenAI<T>;
+	return cached;
 }

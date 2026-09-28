@@ -1,8 +1,10 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import type { APIPromise } from "@anthropic-ai/sdk/core/api-promise";
-// The one runtime import: cached streams are replayed as the SDK's own Stream class.
+// Runtime imports: cached streams replay as the SDK's own Stream, and its stream() helper is reused.
 import { Stream } from "@anthropic-ai/sdk/core/streaming";
+import { MessageStream } from "@anthropic-ai/sdk/lib/MessageStream";
 import type {
+	ContentBlock,
 	Message,
 	MessageCreateParamsBase,
 	MessageCreateParamsNonStreaming,
@@ -11,13 +13,14 @@ import type {
 } from "@anthropic-ai/sdk/resources/messages";
 import type { Cache, CallOptions } from "./cache.ts";
 import type { KeyInput } from "./key.ts";
-import { override, tap, without } from "./provider.ts";
+import { override, tap, untilAborted, without } from "./provider.ts";
 
 type RequestOptions = Anthropic.RequestOptions;
 
 /**
- * `messages.create` as the wrapper exposes it: results are plain Promises, so `.withResponse()`
- * and `.asResponse()` are not available. A cached stream is a real SDK `Stream`.
+ * `messages.create` as the wrapper exposes it: results are plain Promises, and only the streaming
+ * form has `.withResponse()` (the SDK's `stream()` helper needs it). A cached stream is a real SDK
+ * `Stream`.
  */
 export interface CachedMessagesCreate {
 	(
@@ -27,11 +30,20 @@ export interface CachedMessagesCreate {
 	(
 		body: MessageCreateParamsStreaming,
 		options?: RequestOptions,
-	): Promise<Stream<RawMessageStreamEvent>>;
+	): Promise<Stream<RawMessageStreamEvent>> & {
+		withResponse(): Promise<StreamWithResponse>;
+	};
 	(
 		body: MessageCreateParamsBase,
 		options?: RequestOptions,
 	): Promise<Stream<RawMessageStreamEvent> | Message>;
+}
+
+/** `response` and `request_id` are null for a stream replayed from the cache. */
+export interface StreamWithResponse {
+	data: Stream<RawMessageStreamEvent>;
+	response: Response | null;
+	request_id: string | null | undefined;
 }
 
 export type CachedAnthropic<T extends Anthropic> = Omit<T, "messages"> & {
@@ -69,12 +81,19 @@ function inputTokens(response: Message): number {
 	);
 }
 
-/** Builds the final message from stream events; null until message_stop, or if not all text. */
+// Block types a stream is stored with. Others (tool use, server tools and their results) make it
+// unstorable, the same way tool_use rules out a non-streamed answer.
+const REPLAYABLE = new Set(["text", "thinking", "redacted_thinking"]);
+
+/**
+ * Builds the final message from stream events, accumulating blocks exactly as MessageStream does.
+ * Null until message_stop, or if a block or delta is not one it can replay.
+ */
 function assembler() {
 	let message: Message | undefined;
 	let stopped = false;
-	let plainText = true;
-	const texts: string[] = [];
+	let replayable = true;
+	const blocks: ContentBlock[] = [];
 	return {
 		add(event: RawMessageStreamEvent): void {
 			switch (event.type) {
@@ -82,14 +101,35 @@ function assembler() {
 					message = { ...event.message, content: [] };
 					break;
 				case "content_block_start":
-					if (event.content_block.type === "text") texts[event.index] = "";
-					else plainText = false;
+					if (!REPLAYABLE.has(event.content_block.type)) replayable = false;
+					blocks.push({ ...event.content_block } as ContentBlock);
 					break;
-				case "content_block_delta":
-					if (event.delta.type === "text_delta")
-						texts[event.index] = (texts[event.index] ?? "") + event.delta.text;
-					else plainText = false;
+				case "content_block_delta": {
+					const block = blocks[event.index];
+					const delta = event.delta;
+					if (delta.type === "text_delta" && block?.type === "text") {
+						block.text += delta.text;
+					} else if (
+						delta.type === "citations_delta" &&
+						block?.type === "text"
+					) {
+						block.citations = [...(block.citations ?? []), delta.citation];
+					} else if (
+						delta.type === "thinking_delta" &&
+						block?.type === "thinking"
+					) {
+						block.thinking += delta.thinking;
+					} else if (
+						delta.type === "signature_delta" &&
+						block?.type === "thinking"
+					) {
+						// Replaced, not appended: the SDK keeps the last signature.
+						block.signature = delta.signature;
+					} else {
+						replayable = false;
+					}
 					break;
+				}
 				case "message_delta":
 					if (!message) break;
 					message.stop_reason = event.delta.stop_reason;
@@ -110,16 +150,13 @@ function assembler() {
 			}
 		},
 		result(): Message | null {
-			if (!message || !stopped || !plainText) return null;
-			return {
-				...message,
-				content: texts.map((text) => ({ type: "text", text, citations: null })),
-			};
+			if (!message || !stopped || !replayable) return null;
+			return { ...message, content: blocks };
 		},
 	};
 }
 
-/** The event sequence MessageStream expects, for a finished all-text message. */
+/** Events that make MessageStream rebuild `message` block for block: each block starts empty, then one delta fills it. */
 async function* replayEvents(
 	message: Message,
 ): AsyncGenerator<RawMessageStreamEvent> {
@@ -134,17 +171,53 @@ async function* replayEvents(
 		},
 	};
 	for (const [index, block] of message.content.entries()) {
-		if (block.type !== "text") continue;
-		yield {
-			type: "content_block_start",
-			index,
-			content_block: { type: "text", text: "", citations: null },
-		};
-		yield {
-			type: "content_block_delta",
-			index,
-			delta: { type: "text_delta", text: block.text },
-		};
+		if (block.type === "text") {
+			// An empty list and null both mean "no citations", and the SDK keeps whichever the start had.
+			yield {
+				type: "content_block_start",
+				index,
+				content_block: {
+					type: "text",
+					text: "",
+					citations: block.citations && [],
+				},
+			};
+			yield {
+				type: "content_block_delta",
+				index,
+				delta: { type: "text_delta", text: block.text },
+			};
+			for (const citation of block.citations ?? []) {
+				yield {
+					type: "content_block_delta",
+					index,
+					delta: { type: "citations_delta", citation },
+				};
+			}
+		} else if (block.type === "thinking") {
+			yield {
+				type: "content_block_start",
+				index,
+				content_block: { type: "thinking", thinking: "", signature: "" },
+			};
+			yield {
+				type: "content_block_delta",
+				index,
+				delta: { type: "thinking_delta", thinking: block.thinking },
+			};
+			yield {
+				type: "content_block_delta",
+				index,
+				delta: { type: "signature_delta", signature: block.signature },
+			};
+		} else {
+			// redacted_thinking arrives whole, with no deltas.
+			yield {
+				type: "content_block_start",
+				index,
+				content_block: block as never,
+			};
+		}
 		yield { type: "content_block_stop", index };
 	}
 	yield {
@@ -168,8 +241,8 @@ async function* replayEvents(
 }
 
 /**
- * Wraps an Anthropic client so non-streaming `messages.create` calls go through `cache`.
- * Streaming (including `messages.stream()`) and every other method reach the SDK untouched.
+ * Wraps an Anthropic client so `messages.create` (streaming or not) and `messages.stream()` go
+ * through `cache`. Every other method reaches the SDK untouched.
  */
 export function withCache<T extends Anthropic>(
 	client: T,
@@ -187,18 +260,23 @@ export function withCache<T extends Anthropic>(
 		requestOptions?: RequestOptions,
 	) => {
 		const { model, messages: history, ...rest } = body;
+		const key = {
+			model,
+			messages: history,
+			params: without(rest, NON_SEMANTIC),
+		};
 		if (body.stream) {
-			return createStream(body, requestOptions, {
-				model,
-				messages: history,
-				params: without(rest, NON_SEMANTIC),
-			});
+			const result = createStream(body, requestOptions, key);
+			const data = result.then((r) => r.data);
+			// Handled here so a caller that only uses withResponse() never sees an unhandled rejection.
+			data.catch(() => {});
+			return Object.assign(data, { withResponse: () => result });
 		}
 		return cache.wrap(
 			() => original(body, requestOptions) as Promise<Message>,
 			{
 				...options,
-				key: { model, messages: history, params: without(rest, NON_SEMANTIC) },
+				key,
 				shouldStore: isPlainAnswer,
 				usage: (r) => ({
 					input: inputTokens(r),
@@ -212,20 +290,34 @@ export function withCache<T extends Anthropic>(
 		body: MessageCreateParamsBase,
 		requestOptions: RequestOptions | undefined,
 		key: KeyInput,
-	): Promise<Stream<RawMessageStreamEvent>> {
+	): Promise<StreamWithResponse> {
 		const handle = await cache.lookup<Message>(key, options);
 		if (handle.hit) {
 			const message = handle.hit.response;
-			return new Stream(
-				() => replayEvents(message),
-				new AbortController(),
+			const controller = new AbortController();
+			// The caller's signal (the stream() helper passes one) has to stop the replay too.
+			const signal = requestOptions?.signal;
+			if (signal?.aborted) controller.abort();
+			else
+				signal?.addEventListener("abort", () => controller.abort(), {
+					once: true,
+				});
+			const data = new Stream(
+				() => untilAborted(replayEvents(message), controller.signal),
+				controller,
 				client,
 			);
+			return { data, response: null, request_id: null };
 		}
-		const source = (await original(
-			body,
-			requestOptions,
-		)) as Stream<RawMessageStreamEvent>;
+		const {
+			data: source,
+			response,
+			request_id,
+		} = await (
+			original(body, requestOptions) as APIPromise<
+				Stream<RawMessageStreamEvent>
+			>
+		).withResponse();
 		const assembled = assembler();
 		const iterate = () =>
 			tap(source, source.controller.signal, assembled.add, () => {
@@ -240,12 +332,24 @@ export function withCache<T extends Anthropic>(
 				}
 			});
 		// Same controller as the SDK's stream, so abort() still cancels the request.
-		return new Stream(iterate, source.controller, client);
+		return {
+			data: new Stream(iterate, source.controller, client),
+			response,
+			request_id,
+		};
 	}
 
-	return override(
-		client,
-		"messages",
-		override(messages, "create", create),
-	) as unknown as CachedAnthropic<T>;
+	// The SDK's helper calls messages.create on the object it is given, so it gets the wrapped one.
+	const stream = (
+		body: MessageCreateParamsBase,
+		requestOptions?: RequestOptions,
+	) =>
+		MessageStream.createMessage(cachedMessages, body, requestOptions, {
+			logger: client.logger ?? console,
+		});
+	const cachedMessages = override(messages, { create, stream });
+
+	return override(client, {
+		messages: cachedMessages,
+	}) as unknown as CachedAnthropic<T>;
 }

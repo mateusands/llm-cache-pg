@@ -36,6 +36,7 @@ try {
 			"package/LICENSE",
 			"package/README.md",
 			"package/README.pt-BR.md",
+			"package/bin/llm-cache-pg.mjs",
 			"package/package.json",
 		];
 		if (JSON.stringify(extra) !== JSON.stringify(expected)) {
@@ -103,17 +104,44 @@ console.log("cjs core ok without SDKs");`,
 	for (const file of readdirSync(dist).filter((f) => /\.(mjs|cjs)$/.test(f))) {
 		const code = readFileSync(join(dist, file), "utf8");
 		const used = sdks.filter((sdk) =>
-			new RegExp(`(from|require\\()\\s*["']${sdk}(/[^"']*)?["']`).test(code),
+			new RegExp(
+				`(from|require\\(|import\\()\\s*["']${sdk}(/[^"']*)?["']`,
+			).test(code),
 		);
 		const allowed = file.startsWith("openai.")
 			? ["openai"]
 			: file.startsWith("anthropic.")
 				? ["@anthropic-ai/sdk"]
-				: [];
+				: file.startsWith("cli.")
+					? ["pg"]
+					: [];
 		if (used.some((sdk) => !allowed.includes(sdk)))
 			throw new Error(`${file} imports ${used.join(", ")}`);
 	}
 	console.log("runtime imports ok");
+
+	// The installed binary: help works without pg, and a real command says pg is missing.
+	const help = execFileSync("npx", ["llm-cache-pg", "--help"], {
+		cwd: dir,
+		encoding: "utf8",
+	});
+	if (!help.includes("Usage: llm-cache-pg"))
+		throw new Error("bin --help printed no usage");
+	let missing = "";
+	try {
+		execFileSync(
+			"npx",
+			["llm-cache-pg", "stats", "--url", "postgres://x@localhost:1/x"],
+			{ cwd: dir, encoding: "utf8", stdio: "pipe" },
+		);
+	} catch (error) {
+		missing = String(error.stderr);
+		if (error.status !== 1)
+			throw new Error(`bin without pg exited ${error.status}`);
+	}
+	if (!missing.includes("npm install pg"))
+		throw new Error(`bin without pg printed: ${missing}`);
+	console.log("bin ok without pg");
 
 	// The core types must not need openai (or pg) installed.
 	writeFileSync(

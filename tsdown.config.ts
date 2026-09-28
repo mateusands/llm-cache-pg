@@ -6,6 +6,7 @@ export default defineConfig({
 		"src/openai.ts",
 		"src/anthropic.ts",
 		"src/prometheus.ts",
+		"src/cli.ts",
 	],
 	format: ["esm", "cjs"],
 	platform: "node",

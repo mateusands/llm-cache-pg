@@ -4,6 +4,17 @@ All notable changes to this project. The format follows [Keep a Changelog](https
 
 ## [Unreleased]
 
+### Added
+
+- `llm-cache-pg` CLI: `migrate`, `stats`, `prune` and `invalidate` (a dry run unless `--yes`). Needs `pg`, now an optional peer dependency.
+- `chat.completions.stream()` and `messages.stream()` go through the cache, through the SDKs' own helper classes, so their events, final message and abort work as usual.
+- Anthropic streams with thinking, redacted thinking or citations are stored and replayed block for block. Streams with server tools are still not stored.
+- The streaming form of the Anthropic wrapper's `create` has `withResponse()`, which `messages.stream()` needs; `response` and `request_id` are null on a cached answer.
+
+### Fixed
+
+- Aborting a stream replayed from the cache did not stop it: the replay ran to the end.
+
 ## [0.4.0] - 2026-09-28
 
 ### Added
