@@ -12,7 +12,11 @@
 		"declaration": true,
 		"skipLibCheck": true,
 		"noEmit": true,
-		"allowImportingTsExtensions": true
+		"allowImportingTsExtensions": true,
+		"paths": {
+			"llm-cache-pg": ["./src/index.ts"],
+			"llm-cache-pg/openai": ["./src/openai.ts"]
+		}
 	},
 	"include": ["src", "test", "examples", "*.config.ts"]
 }
