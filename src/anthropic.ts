@@ -63,11 +63,35 @@ const NON_SEMANTIC = new Set([
 
 const COMPLETE = new Set(["end_turn", "stop_sequence"]);
 
+// Code execution runs in a container that expires, so a replayed answer would point at a dead one.
+const CODE_EXECUTION = new Set([
+	"code_execution",
+	"bash_code_execution",
+	"text_editor_code_execution",
+]);
+const CONTAINER_BLOCKS = new Set([
+	"code_execution_tool_result",
+	"bash_code_execution_tool_result",
+	"text_editor_code_execution_tool_result",
+	"container_upload",
+]);
+
+function usesContainer(block: ContentBlock): boolean {
+	return (
+		CONTAINER_BLOCKS.has(block.type) ||
+		(block.type === "server_tool_use" && CODE_EXECUTION.has(block.name))
+	);
+}
+
+/** Whether an answer can be stored, streamed or not: complete, no client tool call, no container. */
 function isPlainAnswer(response: Message): boolean {
 	return (
 		COMPLETE.has(response.stop_reason ?? "") &&
 		response.content.length > 0 &&
-		!response.content.some((block) => block.type === "tool_use")
+		response.container == null &&
+		!response.content.some(
+			(block) => block.type === "tool_use" || usesContainer(block),
+		)
 	);
 }
 
@@ -81,9 +105,17 @@ function inputTokens(response: Message): number {
 	);
 }
 
-// Block types a stream is stored with. Others (tool use, server tools and their results) make it
-// unstorable, the same way tool_use rules out a non-streamed answer.
-const REPLAYABLE = new Set(["text", "thinking", "redacted_thinking"]);
+// Block types a stream is stored with. Anything else (client tool use, unknown types) makes it
+// unstorable; isPlainAnswer then also rules out code execution.
+const REPLAYABLE = new Set([
+	"text",
+	"thinking",
+	"redacted_thinking",
+	"server_tool_use",
+	"web_search_tool_result",
+	"web_fetch_tool_result",
+	"tool_search_tool_result",
+]);
 
 /**
  * Builds the final message from stream events, accumulating blocks exactly as MessageStream does.
@@ -94,6 +126,8 @@ function assembler() {
 	let stopped = false;
 	let replayable = true;
 	const blocks: ContentBlock[] = [];
+	// Tool input arrives as JSON text in pieces, parsed when its block stops.
+	const inputJson = new Map<number, string>();
 	return {
 		add(event: RawMessageStreamEvent): void {
 			switch (event.type) {
@@ -125,7 +159,27 @@ function assembler() {
 					) {
 						// Replaced, not appended: the SDK keeps the last signature.
 						block.signature = delta.signature;
+					} else if (
+						delta.type === "input_json_delta" &&
+						block?.type === "server_tool_use"
+					) {
+						inputJson.set(
+							event.index,
+							(inputJson.get(event.index) ?? "") + delta.partial_json,
+						);
 					} else {
+						replayable = false;
+					}
+					break;
+				}
+				case "content_block_stop": {
+					const block = blocks[event.index];
+					if (block?.type !== "server_tool_use") break;
+					const json = inputJson.get(event.index);
+					try {
+						// Like the SDK: no input deltas means an empty input.
+						block.input = json ? JSON.parse(json) : {};
+					} catch {
 						replayable = false;
 					}
 					break;
@@ -134,6 +188,9 @@ function assembler() {
 					if (!message) break;
 					message.stop_reason = event.delta.stop_reason;
 					message.stop_sequence = event.delta.stop_sequence;
+					message.stop_details = event.delta.stop_details ?? null;
+					if (event.delta.container != null)
+						message.container = event.delta.container;
 					// Delta usage is cumulative; fields it leaves null or absent keep their start values.
 					message.usage = {
 						...message.usage,
@@ -210,8 +267,22 @@ async function* replayEvents(
 				index,
 				delta: { type: "signature_delta", signature: block.signature },
 			};
+		} else if (block.type === "server_tool_use") {
+			yield {
+				type: "content_block_start",
+				index,
+				content_block: { ...block, input: {} },
+			};
+			yield {
+				type: "content_block_delta",
+				index,
+				delta: {
+					type: "input_json_delta",
+					partial_json: JSON.stringify(block.input),
+				},
+			};
 		} else {
-			// redacted_thinking arrives whole, with no deltas.
+			// redacted_thinking and tool results arrive whole, with no deltas.
 			yield {
 				type: "content_block_start",
 				index,
@@ -225,8 +296,8 @@ async function* replayEvents(
 		delta: {
 			stop_reason: message.stop_reason,
 			stop_sequence: message.stop_sequence,
-			container: null,
-			stop_details: null,
+			container: message.container ?? null,
+			stop_details: message.stop_details ?? null,
 		},
 		usage: {
 			output_tokens: message.usage.output_tokens,
