@@ -4,7 +4,7 @@
 
 **Cache semântico para chamadas de LLM em TypeScript, sobre PostgreSQL puro + pgvector.** Roda em qualquer Postgres com pgvector (RDS, Supabase, Neon, self-hosted), sem extensão customizada para instalar. Envolve sua chamada à OpenAI ou à Anthropic em uma linha, isola os dados por tenant e exporta métricas para o Prometheus.
 
-> **Status: v0.4.** Antes da 1.0, a API ainda pode mudar entre versões minor (veja o [changelog](CHANGELOG.md)).
+> **Status: v0.5.** Antes da 1.0, a API ainda pode mudar entre versões minor (veja o [changelog](CHANGELOG.md)).
 
 ---
 
