@@ -53,6 +53,11 @@ export interface PrometheusHooks {
 
 // The entry count reads Postgres statistics, so a scrape costs one cheap query per table.
 const ENTRIES_TIMEOUT_MS = 1000;
+// Seconds. Database lookups take well under 5 ms, where the client's default buckets start; the
+// upper end covers embedding calls to a remote API.
+const DURATION_BUCKETS = [
+	0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5,
+];
 const SIMILARITY_BUCKETS = [
 	0.5, 0.6, 0.7, 0.8, 0.85, 0.9, 0.92, 0.94, 0.96, 0.98, 1,
 ];
@@ -109,6 +114,7 @@ export function prometheusHooks(options: PrometheusOptions): PrometheusHooks {
 				name: "llm_cache_lookup_duration_seconds",
 				help: "Time spent per lookup stage.",
 				labelNames: ["stage"],
+				buckets: DURATION_BUCKETS,
 				registers,
 			}),
 	);

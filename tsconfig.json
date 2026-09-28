@@ -15,7 +15,9 @@
 		"allowImportingTsExtensions": true,
 		"paths": {
 			"llm-cache-pg": ["./src/index.ts"],
-			"llm-cache-pg/openai": ["./src/openai.ts"]
+			"llm-cache-pg/openai": ["./src/openai.ts"],
+			"llm-cache-pg/anthropic": ["./src/anthropic.ts"],
+			"llm-cache-pg/prometheus": ["./src/prometheus.ts"]
 		}
 	},
 	"include": ["src", "test", "examples", "bench", "*.config.ts"]

@@ -111,6 +111,19 @@ describe("prometheusHooks", () => {
 		expect(await value("llm_cache_similarity", { le: "0.5" })).toBe(1);
 	});
 
+	it("should have buckets fine enough for sub-millisecond lookups", async () => {
+		const { ask, value } = await setup();
+
+		await ask("reset password");
+
+		expect(
+			await value("llm_cache_lookup_duration_seconds", {
+				stage: "exact",
+				le: "0.0005",
+			}),
+		).toBeDefined();
+	});
+
 	it("should count errors by stage", async () => {
 		const registry = new Registry();
 		const hooks = prometheusHooks({ client, registry });
