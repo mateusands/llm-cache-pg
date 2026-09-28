@@ -228,6 +228,121 @@ function withText(
 	};
 }
 
+describe("per-call threshold and exact-only mode", () => {
+	it("should apply a threshold given on the call", async () => {
+		const { ask, cache } = await migrated();
+		await ask("How do I reset my password?");
+
+		// cos ~0.85 to the stored question.
+		expect(
+			await cache.get(request("How do I change my email?"), {
+				threshold: 0.99,
+			}),
+		).toBeNull();
+		expect(
+			await cache.get(request("How do I change my email?"), { threshold: 0.8 }),
+		).toMatchObject({
+			result: "semantic_hit",
+		});
+	});
+
+	it("should skip embeddings and semantic lookups when semantic is off", async () => {
+		let embeds = 0;
+		const counting: CacheOptions["embed"] = async (text) => {
+			embeds++;
+			return embed(text);
+		};
+		const { ask, calls, events, table } = await migrated({
+			embed: counting,
+			semantic: false,
+		});
+
+		await ask("How do I reset my password?");
+		await ask("forgot my password, what now?");
+		await ask("How do I reset my password?");
+
+		expect(embeds).toBe(0);
+		expect(calls()).toBe(2);
+		expect(events.map((e) => e.result)).toEqual(["miss", "miss", "exact_hit"]);
+		expect(events[0]?.durations).not.toHaveProperty("embed");
+		const { rows } = await pool.query(
+			`SELECT count(*)::int AS n FROM ${table} WHERE embedding IS NULL`,
+		);
+		expect(rows[0].n).toBe(2);
+	});
+
+	it("should let a call turn semantic lookups back on", async () => {
+		const { ask, cache } = await migrated({ semantic: false });
+		await cache.set(
+			request("How do I reset my password?"),
+			{ answer: "stored" },
+			{ semantic: true },
+		);
+
+		const found = await cache.get(request("forgot my password, what now?"), {
+			semantic: true,
+		});
+
+		expect(found).toMatchObject({
+			result: "semantic_hit",
+			response: { answer: "stored" },
+		});
+		await ask("unrelated");
+	});
+
+	it("should never return an entry stored without an embedding from a semantic lookup", async () => {
+		const { cache, events } = await migrated();
+		await cache.set(
+			request("How do I reset my password?"),
+			{ answer: "a" },
+			{ semantic: false },
+		);
+
+		expect(
+			await cache.get(request("forgot my password, what now?")),
+		).toBeNull();
+		expect(events.at(-1)).toMatchObject({ result: "miss" });
+		expect(events.at(-1)).not.toHaveProperty("similarity");
+	});
+
+	it("should warn once and skip writes when exact-only runs on a table that is not migrated", async () => {
+		const { ask, calls, errors, table } = await migrated({ semantic: false });
+		await pool.query(
+			`ALTER TABLE ${table} ALTER COLUMN embedding SET NOT NULL`,
+		);
+		const fresh = createCache({
+			pool,
+			embed,
+			table,
+			awaitStore: true,
+			semantic: false,
+			onError: (e, stage) => errors.push({ stage, error: e }),
+		});
+
+		await fresh.wrap(async () => 1, {
+			key: request("How do I reset my password?"),
+		});
+		await fresh.wrap(async () => 1, {
+			key: request("How do I reset my password?"),
+		});
+
+		expect(errors).toHaveLength(1);
+		expect(String(errors[0]?.error)).toMatch(/migrate\(\)/);
+		expect(
+			(await pool.query(`SELECT count(*)::int AS n FROM ${table}`)).rows[0].n,
+		).toBe(0);
+		await ask("x");
+		expect(calls()).toBe(1);
+	});
+
+	it("should reject an invalid threshold on a call", async () => {
+		const { cache } = await migrated();
+		await expect(cache.get(request("x"), { threshold: 2 })).rejects.toThrow(
+			/threshold/,
+		);
+	});
+});
+
 describe("expiry", () => {
 	it("should not answer from an expired entry, and cache the fresh answer again", async () => {
 		const { ask, calls, events, table } = await migrated({ ttl: "1h" });
@@ -406,6 +521,54 @@ describe("flush", () => {
 
 		const { rows } = await pool.query(`SELECT hits FROM ${table}`);
 		expect(rows).toEqual([{ hits: 1 }]);
+	});
+});
+
+describe("lookup handle", () => {
+	it("should store later through the handle, reusing the embedding from the lookup", async () => {
+		let embeds = 0;
+		const counting: CacheOptions["embed"] = async (text) => {
+			embeds++;
+			return embed(text);
+		};
+		const { cache } = await migrated({ embed: counting });
+
+		const first = await cache.lookup(request("How do I reset my password?"));
+		expect(first.hit).toBeNull();
+		first.store({ answer: "streamed" }, { usage: { input: 5, output: 7 } });
+		await cache.flush();
+
+		const second = await cache.lookup(request("How do I reset my password?"));
+		expect(second.hit).toMatchObject({
+			result: "exact_hit",
+			response: { answer: "streamed" },
+		});
+		expect(embeds).toBe(1);
+	});
+
+	it("should make store a no-op on a hit, a bypass and a failed setup", async () => {
+		const { cache, table } = await migrated();
+		const bypass = await cache.lookup(
+			request("x", { messages: [{ role: "assistant", content: "Sure," }] }),
+		);
+		bypass.store({ answer: "no" });
+
+		const down = new pg.Pool({
+			host: "127.0.0.1",
+			port: 1,
+			connectionTimeoutMillis: 500,
+		});
+		const broken = createCache({ pool: down, embed, table, onError: () => {} });
+		(await broken.lookup(request("How do I reset my password?"))).store({
+			answer: "no",
+		});
+		await broken.flush();
+		await down.end();
+
+		await cache.flush();
+		expect(
+			(await pool.query(`SELECT count(*)::int AS n FROM ${table}`)).rows[0].n,
+		).toBe(0);
 	});
 });
 

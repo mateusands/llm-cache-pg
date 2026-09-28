@@ -8,6 +8,7 @@ export type {
 	ErrorStage,
 	InvalidateFilter,
 	LookupEvent,
+	LookupHandle,
 	LookupResult,
 	Usage,
 	WrapOptions,

@@ -24,7 +24,7 @@ As opções que existem não servem para uma stack típica de TypeScript + Postg
 
 O `llm-cache-pg` vive na sua aplicação, usa o Postgres que você já tem e só precisa da extensão `vector`, que os provedores gerenciados já liberam.
 
-**Requisitos:** Node 22+, PostgreSQL com pgvector 0.8+ (versões mais antigas funcionam, com buscas semânticas mais fracas em namespaces cheios). Sem dependências em runtime: você fornece o pool do `pg` e, se quiser, o client da `openai`. O CI roda a suíte de integração em pgvector 0.8.6 / Postgres 18, 0.8.0 / Postgres 13 e 0.7.4 / Postgres 17.
+**Requisitos:** Node 22+, PostgreSQL com pgvector 0.8+ (versões mais antigas funcionam, com buscas semânticas mais fracas em namespaces cheios). Sem dependências em runtime no núcleo: você fornece o pool do `pg` e, se quiser, o client de um SDK. O CI roda a suíte de integração em pgvector 0.8.6 / Postgres 18, 0.8.0 / Postgres 13 e 0.7.4 / Postgres 17.
 
 ## Funcionalidades
 
@@ -87,11 +87,19 @@ Uma versão executável está em [examples/openai-basic](examples/openai-basic/i
 
 ## O que nunca é cacheado
 
-- Requisições com streaming (inclusive o `messages.stream()` da Anthropic), `n > 1` ou áudio: vão direto para o SDK.
+- Os helpers de stream dos SDKs (`chat.completions.stream()`, `messages.stream()`), `n > 1` e áudio: vão direto para o SDK. O `create({ stream: true })` é cacheado (veja abaixo).
 - Requisições cuja última mensagem não é do usuário ou tem partes que não são texto, como imagens.
 - Respostas com tool calls, ou que não terminaram normalmente (`finish_reason` diferente de `stop`; `stop_reason` diferente de `end_turn` ou `stop_sequence`).
 
-Nos dois wrappers, uma resposta do cache volta como uma Promise comum, então `.withResponse()` não está disponível em chamadas sem streaming. Na Anthropic, os tokens gravados incluem leituras e escritas do prompt cache.
+Nos dois wrappers, os resultados voltam como Promises comuns, então `.withResponse()` não está disponível. Na Anthropic, os tokens gravados incluem leituras e escritas do prompt cache.
+
+### Streaming
+
+O `create({ stream: true })` também passa pelo cache. Num miss, você recebe o stream do SDK intacto, e a resposta é gravada quando o stream termina normalmente. Num hit, você recebe um `Stream` de verdade do SDK que reproduz a resposta gravada, então `for await`, `tee()` e `toReadableStream()` funcionam como sempre.
+
+- Nada é gravado se o stream for abortado, der erro, for interrompido, chamar tools ou (por enquanto) tiver algo além de texto. Parar de ler com `break` conta como interrompido, inclusive um `break` no chunk final.
+- Pedidos com e sem stream são cacheados separadamente.
+- A reprodução manda a resposta inteira num único chunk de conteúdo, e não token a token.
 
 ## Escolhendo o threshold
 
@@ -106,6 +114,17 @@ Medido com `text-embedding-3-small` (similaridade de cosseno):
 | "How do I reset my password?" / "How do I cancel my subscription?" | 0,468 |
 
 Uma pergunta parecida, mas com outra resposta, pode ter nota maior que uma paráfrase de verdade. Por isso nenhum threshold pega reformulações soltas sem também servir respostas erradas. O default de 0,92 só aceita reformulações próximas. Baixe esse valor só depois de medir com o seu próprio tráfego.
+
+O threshold e a busca semântica podem ser definidos por chamada, então cada tenant ou rota tem o seu:
+
+```ts
+// Um bot de FAQ estreito, que você já mediu:
+const faq = withCache(openai, cache, { namespace: "faq", threshold: 0.88 });
+// Perguntas abertas: só repetições exatas. Sem chamadas de embedding, sem falso hit.
+const chat = withCache(openai, cache, { namespace: tenantId, semantic: false });
+```
+
+Entradas só exatas são gravadas sem embedding, o que exige o schema do `migrate()` da 0.4 ou mais nova.
 
 ## Benchmark
 
@@ -134,7 +153,8 @@ Reproduza com `pnpm bench` (precisa de Docker e `OPENAI_API_KEY`; os embeddings 
 | --- | --- | --- |
 | `pool` | obrigatório | Um `pg.Pool`, ou qualquer coisa com `query` e `connect` |
 | `embed` | obrigatório | `(text, { signal }) => Promise<number[]>` |
-| `threshold` | `0.92` | Similaridade de cosseno para um hit semântico |
+| `threshold` | `0.92` | Similaridade de cosseno para um hit semântico; também por chamada |
+| `semantic` | `true` | `false` para só hits exatos, sem chamadas de embedding; também por chamada |
 | `ttl` | nenhum | `"30s"`, `"15m"`, `"7d"`, ms ou `null` |
 | `table` | `llm_cache_entries` | Precisa ser a mesma do `migrate()` |
 | `lookupTimeoutMs` | `200` | Por consulta ao banco, aplicado no client e no servidor |

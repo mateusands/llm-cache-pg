@@ -4,6 +4,22 @@ All notable changes to this project. The format follows [Keep a Changelog](https
 
 ## [Unreleased]
 
+### Added
+
+- `threshold` and `semantic` per call, and `semantic` on the cache. With `semantic: false` only exact matches are served and no embedding is computed.
+- Streaming: `create({ stream: true })` is cached in both wrappers. Finished streams are stored and replayed as a real SDK `Stream`; aborted, failed, truncated, tool-calling or non-text streams are not.
+- `cache.lookup()`: a lookup whose handle stores the answer later, reusing the lookup's embedding. The stream support is built on it.
+- Schema v2: `embedding` is optional, for exact-only entries. `migrate()` upgrades v1 tables in place without locking out readers.
+
+### Changed
+
+- `llm-cache-pg/openai` and `llm-cache-pg/anthropic` import their SDK at runtime (only the `Stream` class). The core and `llm-cache-pg/prometheus` still import nothing.
+- The streaming overloads of `create` return a plain `Promise<Stream>`, not an `APIPromise`.
+
+### Fixed
+
+- The OpenAI and Anthropic wrappers could store an answer with no choices or no content blocks.
+
 ## [0.3.0] - 2026-09-28
 
 First release on npm.

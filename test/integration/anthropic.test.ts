@@ -145,15 +145,6 @@ describe("withCache for Anthropic", () => {
 		expect(create).toHaveBeenCalledTimes(4);
 	});
 
-	it("should bypass the cache for streaming", async () => {
-		const { ai, create } = await setup();
-
-		await ai.messages.create({ ...body, stream: true } as never);
-		await ai.messages.create({ ...body, stream: true } as never);
-
-		expect(create).toHaveBeenCalledTimes(2);
-	});
-
 	it.each([
 		[
 			"tool use",
@@ -162,6 +153,7 @@ describe("withCache for Anthropic", () => {
 				content: [{ type: "tool_use", id: "t", name: "x", input: {} }],
 			}),
 		],
+		["no content blocks", message({ content: [] })],
 		["a truncated answer", message({ stop_reason: "max_tokens" })],
 		["a refusal", message({ stop_reason: "refusal" })],
 	])("should not store a response with %s", async (_, answer) => {

@@ -7,7 +7,6 @@ export const DEFAULT_DIMENSIONS = 1536;
 const TABLE_NAME = /^[a-z_][a-z0-9_]{0,47}$/;
 // HNSW indexes on `vector` support at most 2000 dimensions.
 const MAX_DIMENSIONS = 2000;
-const SCHEMA_VERSION = 1;
 
 export interface MigrationOptions {
 	/** Lowercase identifier, at most 48 characters. Default `llm_cache_entries`. */
@@ -58,7 +57,8 @@ CREATE TABLE IF NOT EXISTS ${t} (
   params_hash  text        NOT NULL,
   prompt_hash  text        NOT NULL,
   prompt_text  text        NOT NULL,
-  embedding    vector(${dimensions}) NOT NULL,
+  -- NULL for entries written with semantic lookups off (schema v2).
+  embedding    vector(${dimensions}),
   response     jsonb       NOT NULL,
   tokens_in    int,
   tokens_out   int,
@@ -77,7 +77,18 @@ CREATE TABLE IF NOT EXISTS ${t}_migrations (
   version     int PRIMARY KEY,
   applied_at  timestamptz NOT NULL DEFAULT now()
 );
-INSERT INTO ${t}_migrations (version) VALUES (${SCHEMA_VERSION}) ON CONFLICT DO NOTHING;
+
+-- v2: embedding becomes optional. Guarded, because ALTER TABLE takes an exclusive lock even when
+-- there is nothing to change, and migrate() runs on every startup.
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_attribute
+             WHERE attrelid = to_regclass('${t}') AND attname = 'embedding' AND attnotnull) THEN
+    ALTER TABLE ${t} ALTER COLUMN embedding DROP NOT NULL;
+  END IF;
+END $$;
+
+INSERT INTO ${t}_migrations (version) VALUES (1), (2) ON CONFLICT DO NOTHING;
 `;
 }
 
@@ -90,6 +101,8 @@ export function supportsIterativeScan(version: string): boolean {
 export interface TableInfo {
 	pgvectorVersion: string;
 	dimensions: number;
+	/** False on a v1 table, where every entry must carry an embedding. */
+	embeddingOptional: boolean;
 }
 
 /** Reads the installed pgvector version and the table's vector size. Throws if the table is missing. */
@@ -100,10 +113,13 @@ export async function inspectTable(
 	const { rows } = await db.query<{
 		version: string | null;
 		type: string | null;
+		required: boolean | null;
 	}>(
 		`SELECT (SELECT extversion FROM pg_extension WHERE extname = 'vector') AS version,
-		        (SELECT format_type(atttypid, atttypmod) FROM pg_attribute
-		          WHERE attrelid = to_regclass($1) AND attname = 'embedding') AS type`,
+		        a.type, a.required
+		   FROM (SELECT format_type(atttypid, atttypmod) AS type, attnotnull AS required
+		           FROM pg_attribute WHERE attrelid = to_regclass($1) AND attname = 'embedding') a
+		  RIGHT JOIN (SELECT 1) one ON true`,
 		[table],
 	);
 	const row = rows[0];
@@ -113,7 +129,11 @@ export async function inspectTable(
 			`Table ${table} or the vector extension is missing; run migrate() first`,
 		);
 	}
-	return { pgvectorVersion: row.version, dimensions };
+	return {
+		pgvectorVersion: row.version,
+		dimensions,
+		embeddingOptional: row.required === false,
+	};
 }
 
 /**

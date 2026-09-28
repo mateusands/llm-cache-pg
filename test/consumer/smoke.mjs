@@ -1,7 +1,13 @@
 // Installs the packed tarball into a fresh project and checks it the way a user would consume it:
 // ESM import, CJS require, and strict type checking with and without the optional openai peer.
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+	mkdtempSync,
+	readdirSync,
+	readFileSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -64,27 +70,50 @@ try {
 		"@types/node@22",
 	]);
 
+	// Before any SDK is installed: the core and the metrics entry must load on their own.
 	writeFileSync(
-		join(dir, "esm.mjs"),
+		join(dir, "core.mjs"),
 		`import { createCache, migrate, renderMigrationSql } from "llm-cache-pg";
-import { withCache, openaiEmbedder } from "llm-cache-pg/openai";
 import { prometheusHooks } from "llm-cache-pg/prometheus";
-import { withCache as withAnthropicCache } from "llm-cache-pg/anthropic";
-for (const f of [createCache, migrate, renderMigrationSql, withCache, openaiEmbedder, prometheusHooks, withAnthropicCache]) {
+for (const f of [createCache, migrate, renderMigrationSql, prometheusHooks]) {
   if (typeof f !== "function") throw new Error("missing export");
 }
 if (!renderMigrationSql().includes("CREATE TABLE")) throw new Error("bad SQL");
-console.log("esm ok");`,
+console.log("esm core ok without SDKs");`,
 	);
 	writeFileSync(
-		join(dir, "cjs.cjs"),
+		join(dir, "core.cjs"),
 		`const { createCache } = require("llm-cache-pg");
-const { withCache } = require("llm-cache-pg/openai");
-if (typeof createCache !== "function" || typeof withCache !== "function") throw new Error("missing export");
-console.log("cjs ok");`,
+const { prometheusHooks } = require("llm-cache-pg/prometheus");
+if (typeof createCache !== "function" || typeof prometheusHooks !== "function") throw new Error("missing export");
+console.log("cjs core ok without SDKs");`,
 	);
-	run("node", ["esm.mjs"]);
-	run("node", ["cjs.cjs"]);
+	run("node", ["core.mjs"]);
+	run("node", ["core.cjs"]);
+
+	// Each provider entry may import its own SDK (to replay streams); nothing else imports any.
+	const dist = join(dir, "node_modules", "llm-cache-pg", "dist");
+	const sdks = [
+		"openai",
+		"@anthropic-ai/sdk",
+		"prom-client",
+		"@prometheus-io/client",
+		"pg",
+	];
+	for (const file of readdirSync(dist).filter((f) => /\.(mjs|cjs)$/.test(f))) {
+		const code = readFileSync(join(dist, file), "utf8");
+		const used = sdks.filter((sdk) =>
+			new RegExp(`(from|require\\()\\s*["']${sdk}(/[^"']*)?["']`).test(code),
+		);
+		const allowed = file.startsWith("openai.")
+			? ["openai"]
+			: file.startsWith("anthropic.")
+				? ["@anthropic-ai/sdk"]
+				: [];
+		if (used.some((sdk) => !allowed.includes(sdk)))
+			throw new Error(`${file} imports ${used.join(", ")}`);
+	}
+	console.log("runtime imports ok");
 
 	// The core types must not need openai (or pg) installed.
 	writeFileSync(
@@ -106,6 +135,22 @@ createCache({ pool, embed: async () => [0], threshold: 0.9, ttl: "7d" });`,
 		"@anthropic-ai/sdk@0.128",
 	]);
 	writeFileSync(
+		join(dir, "providers.mjs"),
+		`import { withCache, openaiEmbedder } from "llm-cache-pg/openai";
+import { withCache as withAnthropicCache } from "llm-cache-pg/anthropic";
+for (const f of [withCache, openaiEmbedder, withAnthropicCache]) if (typeof f !== "function") throw new Error("missing export");
+console.log("esm providers ok");`,
+	);
+	writeFileSync(
+		join(dir, "providers.cjs"),
+		`const { withCache } = require("llm-cache-pg/openai");
+const { withCache: withAnthropicCache } = require("llm-cache-pg/anthropic");
+if (typeof withCache !== "function" || typeof withAnthropicCache !== "function") throw new Error("missing export");
+console.log("cjs providers ok");`,
+	);
+	run("node", ["providers.mjs"]);
+	run("node", ["providers.cjs"]);
+	writeFileSync(
 		join(dir, "openai.ts"),
 		`import OpenAI from "openai";
 import { createCache, type Pool } from "llm-cache-pg";
@@ -115,7 +160,9 @@ const client = new OpenAI({ apiKey: "x" });
 const cache = createCache({ pool, embed: openaiEmbedder({ client, model: "text-embedding-3-small" }) });
 const ai = withCache(client, cache, { namespace: "t" });
 const res = ai.chat.completions.create({ model: "m", messages: [{ role: "user", content: "hi" }] });
-res.then((r) => r.choices[0]?.message.content);`,
+res.then((r) => r.choices[0]?.message.content);
+const streamed = ai.chat.completions.create({ model: "m", stream: true, messages: [{ role: "user", content: "hi" }] });
+streamed.then(async (s) => { for await (const chunk of s) chunk.choices[0]?.delta.content; });`,
 	);
 	writeFileSync(
 		join(dir, "anthropic.ts"),
@@ -125,7 +172,8 @@ import { withCache } from "llm-cache-pg/anthropic";
 declare const pool: Pool;
 const cache = createCache({ pool, embed: async () => [0] });
 const ai = withCache(new Anthropic({ apiKey: "x" }), cache, { namespace: "t" });
-ai.messages.create({ model: "m", max_tokens: 10, messages: [{ role: "user", content: "hi" }] }).then((r) => r.content);`,
+ai.messages.create({ model: "m", max_tokens: 10, messages: [{ role: "user", content: "hi" }] }).then((r) => r.content);
+ai.messages.create({ model: "m", max_tokens: 10, stream: true, messages: [{ role: "user", content: "hi" }] }).then(async (s) => { for await (const e of s) e.type; });`,
 	);
 	writeFileSync(
 		join(dir, "prometheus.ts"),

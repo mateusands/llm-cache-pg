@@ -22,7 +22,9 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
-      - run: npm publish --dry-run
+      # A unique prerelease version, so the dry run never collides with one already published.
+      - run: npm version --no-git-tag-version "$(node -p "require('./package.json').version")-dryrun.${GITHUB_SHA::7}"
+      - run: npm publish --dry-run --tag dryrun
 
   publish:
     if: startsWith(github.ref, 'refs/tags/v')

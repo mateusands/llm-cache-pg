@@ -23,7 +23,8 @@ export interface Match {
 export interface NewEntry {
 	namespace: string;
 	key: CacheKey;
-	embedding: readonly number[];
+	/** Null for entries written with semantic lookups off. */
+	embedding: readonly number[] | null;
 	response: unknown;
 	tokensIn?: number | null;
 	tokensOut?: number | null;
@@ -91,6 +92,7 @@ export async function findNearest(
 			const { rows } = await client.query<Match>(
 				`SELECT ${MATCH_COLUMNS}, 1 - (embedding <=> $1::vector) AS similarity FROM ${config.table}
 				 WHERE namespace = $2 AND model = $3 AND key_version = $4 AND params_hash = $5 AND ${LIVE}
+				   AND embedding IS NOT NULL
 				 ORDER BY embedding <=> $1::vector
 				 LIMIT 1`,
 				[
@@ -139,7 +141,7 @@ export async function insertEntry(
 					entry.key.paramsHash,
 					entry.key.promptHash,
 					entry.key.text,
-					toVector(entry.embedding),
+					entry.embedding && toVector(entry.embedding),
 					JSON.stringify(entry.response),
 					entry.tokensIn ?? null,
 					entry.tokensOut ?? null,

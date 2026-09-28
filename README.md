@@ -24,7 +24,7 @@ Existing options don't fit a typical TypeScript + Postgres stack:
 
 `llm-cache-pg` lives in your app, uses the Postgres you already run, and only needs the `vector` extension, which managed providers already allow.
 
-**Requirements:** Node 22+, PostgreSQL with pgvector 0.8+ (older pgvector works, with weaker semantic lookups in busy namespaces). No runtime dependencies: you bring the `pg` pool and, optionally, the `openai` client. CI runs the integration suite on pgvector 0.8.6 / Postgres 18, 0.8.0 / Postgres 13 and 0.7.4 / Postgres 17.
+**Requirements:** Node 22+, PostgreSQL with pgvector 0.8+ (older pgvector works, with weaker semantic lookups in busy namespaces). No runtime dependencies in the core: you bring the `pg` pool and, optionally, an SDK client. CI runs the integration suite on pgvector 0.8.6 / Postgres 18, 0.8.0 / Postgres 13 and 0.7.4 / Postgres 17.
 
 ## Features
 
@@ -87,11 +87,19 @@ A runnable version is in [examples/openai-basic](examples/openai-basic/index.ts)
 
 ## What is never cached
 
-- Streaming (including Anthropic's `messages.stream()`), `n > 1` and audio requests: passed straight to the SDK.
+- The SDK stream helpers (`chat.completions.stream()`, `messages.stream()`), `n > 1` and audio requests: passed straight to the SDK. `create({ stream: true })` is cached (see below).
 - Requests whose last message isn't from the user, or has non-text parts such as images.
 - Responses with tool calls, or that didn't finish normally (`finish_reason` other than `stop`; `stop_reason` other than `end_turn` or `stop_sequence`).
 
-With either wrapper, a cached answer comes back as a plain Promise, so `.withResponse()` isn't available on non-streaming calls. With Anthropic, stored token counts include prompt-cache reads and writes.
+With either wrapper, results come back as plain Promises, so `.withResponse()` isn't available. With Anthropic, stored token counts include prompt-cache reads and writes.
+
+### Streaming
+
+`create({ stream: true })` goes through the cache too. On a miss you get the SDK's stream untouched, and the answer is stored once the stream has ended normally. On a hit you get a real SDK `Stream` that replays the stored answer, so `for await`, `tee()` and `toReadableStream()` work as usual.
+
+- Nothing is stored if the stream is aborted, fails, is cut short, calls tools, or (for now) contains anything but text. Stopping with a `break` counts as cut short, even on the final chunk.
+- Streamed and plain requests are cached separately.
+- Replays send the whole answer in one content chunk rather than token by token.
 
 ## Choosing a threshold
 
@@ -106,6 +114,17 @@ Measured with `text-embedding-3-small` (cosine similarity):
 | "How do I reset my password?" / "How do I cancel my subscription?" | 0.468 |
 
 A look-alike question with a different answer can score higher than a real paraphrase, so no threshold catches loose rewording without also serving wrong answers. The default of 0.92 only accepts close rewording. Lower it only after measuring on your own traffic.
+
+Both the threshold and semantic lookups can be set per call, so each tenant or route gets its own:
+
+```ts
+// A narrow FAQ bot that you have measured:
+const faq = withCache(openai, cache, { namespace: "faq", threshold: 0.88 });
+// Open-ended questions: exact repeats only. No embedding calls, no false hits.
+const chat = withCache(openai, cache, { namespace: tenantId, semantic: false });
+```
+
+Exact-only entries are stored without an embedding, which needs the schema from `migrate()` in 0.4 or later.
 
 ## Benchmark
 
@@ -134,7 +153,8 @@ Reproduce with `pnpm bench` (needs Docker and `OPENAI_API_KEY`; embeddings are c
 | --- | --- | --- |
 | `pool` | required | A `pg.Pool`, or anything with `query` and `connect` |
 | `embed` | required | `(text, { signal }) => Promise<number[]>` |
-| `threshold` | `0.92` | Cosine similarity for a semantic hit |
+| `threshold` | `0.92` | Cosine similarity for a semantic hit; also per call |
+| `semantic` | `true` | `false` for exact matches only, with no embedding calls; also per call |
 | `ttl` | none | `"30s"`, `"15m"`, `"7d"`, ms, or `null` |
 | `table` | `llm_cache_entries` | Must match `migrate()` |
 | `lookupTimeoutMs` | `200` | Per database lookup, enforced on client and server |
