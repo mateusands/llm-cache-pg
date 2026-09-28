@@ -552,6 +552,53 @@ describe("withCache for Anthropic, streaming", () => {
 			expect(create).toHaveBeenCalledTimes(2);
 		});
 
+		it("should keep usage objects such as server_tool_use from the final delta", async () => {
+			const events = streamOf([
+				{
+					start: {
+						type: "server_tool_use",
+						id: "s",
+						name: "web_search",
+						input: {},
+					},
+					deltas: [],
+				},
+				TEXT,
+			]).map((e) =>
+				e.type === "message_start"
+					? {
+							...e,
+							message: {
+								...e.message,
+								usage: {
+									...e.message.usage,
+									server_tool_use: { web_search_requests: 0 },
+								},
+							},
+						}
+					: e.type === "message_delta"
+						? {
+								...e,
+								usage: {
+									...e.usage,
+									server_tool_use: { web_search_requests: 1 },
+								},
+							}
+						: e,
+			) as RawMessageStreamEvent[];
+			const { ai, cache } = await setup(() => sdkStream(events));
+			const original = await finalMessage(sdkStream(events));
+
+			await drain(await ai.messages.create(body));
+			await cache.flush();
+			const replayed = await finalMessage(await ai.messages.create(body));
+
+			expect(original.usage.server_tool_use).toEqual({
+				web_search_requests: 1,
+			});
+			expect(replayed.usage).toEqual(original.usage);
+		});
+
 		it("should not store a stream whose message carries a container", async () => {
 			const events = streamOf([TEXT]).map((e) =>
 				e.type === "message_delta"

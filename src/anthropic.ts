@@ -191,13 +191,11 @@ function assembler() {
 					message.stop_details = event.delta.stop_details ?? null;
 					if (event.delta.container != null)
 						message.container = event.delta.container;
-					// Delta usage is cumulative; fields it leaves null or absent keep their start values.
+					// Delta usage is cumulative, objects included (server_tool_use); null or absent fields keep their start values.
 					message.usage = {
 						...message.usage,
 						...Object.fromEntries(
-							Object.entries(event.usage).filter(
-								([, v]) => typeof v === "number",
-							),
+							Object.entries(event.usage).filter(([, v]) => v != null),
 						),
 					};
 					break;
