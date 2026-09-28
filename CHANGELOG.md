@@ -4,6 +4,11 @@ All notable changes to this project. The format follows [Keep a Changelog](https
 
 ## [Unreleased]
 
+### Added
+
+- `chat.completions.stream()` and `messages.stream()` go through the cache, through the SDKs' own helper classes, so their events, final message and abort work as usual.
+- The streaming form of the Anthropic wrapper's `create` has `withResponse()`, which `messages.stream()` needs; `response` and `request_id` are null on a cached answer.
+
 ### Fixed
 
 - Aborting a stream replayed from the cache did not stop it: the replay ran to the end.

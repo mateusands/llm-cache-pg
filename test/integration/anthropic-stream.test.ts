@@ -73,8 +73,11 @@ function events(
 function sdkStream(
 	items: RawMessageStreamEvent[],
 	failAt?: number,
+	signal?: AbortSignal,
 ): Stream<RawMessageStreamEvent> {
 	const controller = new AbortController();
+	// The SDK aborts the request when the caller's signal does.
+	signal?.addEventListener("abort", () => controller.abort(), { once: true });
 	return new Stream(async function* () {
 		for (const [i, item] of items.entries()) {
 			if (controller.signal.aborted) return;
@@ -85,13 +88,18 @@ function sdkStream(
 }
 
 async function setup(
-	make: () => Stream<RawMessageStreamEvent> = () => sdkStream(events()),
+	make: (signal?: AbortSignal) => Stream<RawMessageStreamEvent> = (signal) =>
+		sdkStream(events(), undefined, signal),
 ) {
 	const streams: Stream<RawMessageStreamEvent>[] = [];
-	const create = vi.fn(async () => {
-		const s = make();
+	// Shaped like the SDK's APIPromise, which MessageStream calls withResponse() on.
+	const create = vi.fn((_body: unknown, options?: { signal?: AbortSignal }) => {
+		const s = make(options?.signal);
 		streams.push(s);
-		return s;
+		const response = new Response(null, { headers: { "request-id": "req_1" } });
+		return Object.assign(Promise.resolve(s), {
+			withResponse: async () => ({ data: s, response, request_id: "req_1" }),
+		});
 	});
 	const client = { messages: { create } } as unknown as Anthropic;
 	const table = uniqueTable();
@@ -212,5 +220,62 @@ describe("withCache for Anthropic, streaming", () => {
 		await drain(await ai.messages.create(body));
 
 		expect(create).toHaveBeenCalledTimes(2);
+	});
+
+	describe("messages.stream()", () => {
+		const { stream: _, ...helperBody } = body;
+
+		it("should serve the helper from the cache, with the same final message", async () => {
+			const { ai, cache, create } = await setup();
+
+			const first = await ai.messages.stream(helperBody).finalMessage();
+			await cache.flush();
+			const second = await ai.messages.stream(helperBody).finalMessage();
+
+			expect(create).toHaveBeenCalledTimes(1);
+			expect(second.content).toEqual(first.content);
+			expect(second.stop_reason).toBe(first.stop_reason);
+		});
+
+		it("should emit the helper's text events on a cached answer", async () => {
+			const { ai, cache } = await setup();
+			await ai.messages.stream(helperBody).finalMessage();
+			await cache.flush();
+
+			const texts: string[] = [];
+			await ai.messages
+				.stream(helperBody)
+				.on("text", (text) => texts.push(text))
+				.finalMessage();
+
+			expect(texts.join("")).toBe("Click 'Forgot password'.");
+		});
+
+		it("should keep the request id on a miss and have none on a cached answer", async () => {
+			const { ai, cache } = await setup();
+
+			const miss = ai.messages.stream(helperBody);
+			await miss.finalMessage();
+			await cache.flush();
+			const hit = ai.messages.stream(helperBody);
+			await hit.finalMessage();
+
+			expect(miss.request_id).toBe("req_1");
+			expect(hit.request_id).toBeFalsy();
+		});
+
+		it("should stop a cached answer when the helper is aborted", async () => {
+			const { ai, cache } = await setup();
+			await ai.messages.stream(helperBody).finalMessage();
+			await cache.flush();
+
+			const helper = ai.messages.stream(helperBody);
+			const completed = vi.fn();
+			helper.on("message", completed);
+			helper.on("streamEvent", () => helper.abort());
+
+			await expect(helper.finalMessage()).rejects.toThrow();
+			expect(completed).not.toHaveBeenCalled();
+		});
 	});
 });

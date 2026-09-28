@@ -1,14 +1,13 @@
 // Helpers shared by the SDK wrappers.
 
-/** Returns `target` with `prop` replaced; every other property is read from, and bound to, `target`. */
+/** Returns `target` with the given properties replaced; every other property is read from, and bound to, `target`. */
 export function override<T extends object>(
 	target: T,
-	prop: PropertyKey,
-	value: unknown,
+	replacements: Record<PropertyKey, unknown>,
 ): T {
 	return new Proxy(target, {
 		get(t, p) {
-			if (p === prop) return value;
+			if (Object.hasOwn(replacements, p)) return replacements[p];
 			const v = Reflect.get(t, p, t);
 			return typeof v === "function" ? v.bind(t) : v;
 		},

@@ -87,7 +87,7 @@ Uma versão executável está em [examples/openai-basic](examples/openai-basic/i
 
 ## O que nunca é cacheado
 
-- Os helpers de stream dos SDKs (`chat.completions.stream()`, `messages.stream()`), `n > 1` e áudio: vão direto para o SDK. O `create({ stream: true })` é cacheado (veja abaixo).
+- `n > 1` e áudio: vão direto para o SDK.
 - Requisições cuja última mensagem não é do usuário ou tem partes que não são texto, como imagens.
 - Respostas com tool calls, ou que não terminaram normalmente (`finish_reason` diferente de `stop`; `stop_reason` diferente de `end_turn` ou `stop_sequence`).
 
@@ -95,11 +95,12 @@ Nos dois wrappers, os resultados voltam como Promises comuns, então `.withRespo
 
 ### Streaming
 
-O `create({ stream: true })` também passa pelo cache. Num miss, você recebe o stream do SDK intacto, e a resposta é gravada quando o stream termina normalmente. Num hit, você recebe um `Stream` de verdade do SDK que reproduz a resposta gravada, então `for await`, `tee()` e `toReadableStream()` funcionam como sempre.
+O `create({ stream: true })` e os helpers dos SDKs, `chat.completions.stream()` e `messages.stream()`, também passam pelo cache. Num miss, você recebe o stream do SDK intacto, e a resposta é gravada quando o stream termina normalmente. Num hit, você recebe um `Stream` de verdade do SDK que reproduz a resposta gravada, então `for await`, `tee()` e `toReadableStream()` funcionam como sempre.
 
 - Nada é gravado se o stream for abortado, der erro, for interrompido, chamar tools ou (por enquanto) tiver algo além de texto. Parar de ler com `break` conta como interrompido, inclusive um `break` no chunk final.
 - Pedidos com e sem stream são cacheados separadamente.
 - A reprodução manda a resposta inteira num único chunk de conteúdo, e não token a token.
+- Numa resposta do cache pelo `messages.stream()` da Anthropic, o `request_id` é nulo e o `withResponse()` do helper lança erro: não existe resposta HTTP por trás.
 
 ## Escolhendo o threshold
 

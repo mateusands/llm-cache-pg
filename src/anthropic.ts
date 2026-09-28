@@ -1,7 +1,8 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import type { APIPromise } from "@anthropic-ai/sdk/core/api-promise";
-// The one runtime import: cached streams are replayed as the SDK's own Stream class.
+// Runtime imports: cached streams replay as the SDK's own Stream, and its stream() helper is reused.
 import { Stream } from "@anthropic-ai/sdk/core/streaming";
+import { MessageStream } from "@anthropic-ai/sdk/lib/MessageStream";
 import type {
 	Message,
 	MessageCreateParamsBase,
@@ -16,8 +17,9 @@ import { override, tap, untilAborted, without } from "./provider.ts";
 type RequestOptions = Anthropic.RequestOptions;
 
 /**
- * `messages.create` as the wrapper exposes it: results are plain Promises, so `.withResponse()`
- * and `.asResponse()` are not available. A cached stream is a real SDK `Stream`.
+ * `messages.create` as the wrapper exposes it: results are plain Promises, and only the streaming
+ * form has `.withResponse()` (the SDK's `stream()` helper needs it). A cached stream is a real SDK
+ * `Stream`.
  */
 export interface CachedMessagesCreate {
 	(
@@ -27,11 +29,20 @@ export interface CachedMessagesCreate {
 	(
 		body: MessageCreateParamsStreaming,
 		options?: RequestOptions,
-	): Promise<Stream<RawMessageStreamEvent>>;
+	): Promise<Stream<RawMessageStreamEvent>> & {
+		withResponse(): Promise<StreamWithResponse>;
+	};
 	(
 		body: MessageCreateParamsBase,
 		options?: RequestOptions,
 	): Promise<Stream<RawMessageStreamEvent> | Message>;
+}
+
+/** `response` and `request_id` are null for a stream replayed from the cache. */
+export interface StreamWithResponse {
+	data: Stream<RawMessageStreamEvent>;
+	response: Response | null;
+	request_id: string | null | undefined;
 }
 
 export type CachedAnthropic<T extends Anthropic> = Omit<T, "messages"> & {
@@ -168,8 +179,8 @@ async function* replayEvents(
 }
 
 /**
- * Wraps an Anthropic client so non-streaming `messages.create` calls go through `cache`.
- * Streaming (including `messages.stream()`) and every other method reach the SDK untouched.
+ * Wraps an Anthropic client so `messages.create` (streaming or not) and `messages.stream()` go
+ * through `cache`. Every other method reaches the SDK untouched.
  */
 export function withCache<T extends Anthropic>(
 	client: T,
@@ -187,18 +198,23 @@ export function withCache<T extends Anthropic>(
 		requestOptions?: RequestOptions,
 	) => {
 		const { model, messages: history, ...rest } = body;
+		const key = {
+			model,
+			messages: history,
+			params: without(rest, NON_SEMANTIC),
+		};
 		if (body.stream) {
-			return createStream(body, requestOptions, {
-				model,
-				messages: history,
-				params: without(rest, NON_SEMANTIC),
-			});
+			const result = createStream(body, requestOptions, key);
+			const data = result.then((r) => r.data);
+			// Handled here so a caller that only uses withResponse() never sees an unhandled rejection.
+			data.catch(() => {});
+			return Object.assign(data, { withResponse: () => result });
 		}
 		return cache.wrap(
 			() => original(body, requestOptions) as Promise<Message>,
 			{
 				...options,
-				key: { model, messages: history, params: without(rest, NON_SEMANTIC) },
+				key,
 				shouldStore: isPlainAnswer,
 				usage: (r) => ({
 					input: inputTokens(r),
@@ -212,21 +228,34 @@ export function withCache<T extends Anthropic>(
 		body: MessageCreateParamsBase,
 		requestOptions: RequestOptions | undefined,
 		key: KeyInput,
-	): Promise<Stream<RawMessageStreamEvent>> {
+	): Promise<StreamWithResponse> {
 		const handle = await cache.lookup<Message>(key, options);
 		if (handle.hit) {
 			const message = handle.hit.response;
 			const controller = new AbortController();
-			return new Stream(
+			// The caller's signal (the stream() helper passes one) has to stop the replay too.
+			const signal = requestOptions?.signal;
+			if (signal?.aborted) controller.abort();
+			else
+				signal?.addEventListener("abort", () => controller.abort(), {
+					once: true,
+				});
+			const data = new Stream(
 				() => untilAborted(replayEvents(message), controller.signal),
 				controller,
 				client,
 			);
+			return { data, response: null, request_id: null };
 		}
-		const source = (await original(
-			body,
-			requestOptions,
-		)) as Stream<RawMessageStreamEvent>;
+		const {
+			data: source,
+			response,
+			request_id,
+		} = await (
+			original(body, requestOptions) as APIPromise<
+				Stream<RawMessageStreamEvent>
+			>
+		).withResponse();
 		const assembled = assembler();
 		const iterate = () =>
 			tap(source, source.controller.signal, assembled.add, () => {
@@ -241,12 +270,24 @@ export function withCache<T extends Anthropic>(
 				}
 			});
 		// Same controller as the SDK's stream, so abort() still cancels the request.
-		return new Stream(iterate, source.controller, client);
+		return {
+			data: new Stream(iterate, source.controller, client),
+			response,
+			request_id,
+		};
 	}
 
-	return override(
-		client,
-		"messages",
-		override(messages, "create", create),
-	) as unknown as CachedAnthropic<T>;
+	// The SDK's helper calls messages.create on the object it is given, so it gets the wrapped one.
+	const stream = (
+		body: MessageCreateParamsBase,
+		requestOptions?: RequestOptions,
+	) =>
+		MessageStream.createMessage(cachedMessages, body, requestOptions, {
+			logger: client.logger ?? console,
+		});
+	const cachedMessages = override(messages, { create, stream });
+
+	return override(client, {
+		messages: cachedMessages,
+	}) as unknown as CachedAnthropic<T>;
 }

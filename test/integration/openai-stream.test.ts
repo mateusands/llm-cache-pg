@@ -91,8 +91,11 @@ function chunks(
 function sdkStream(
 	items: ChatCompletionChunk[],
 	failAt?: number,
+	signal?: AbortSignal,
 ): Stream<ChatCompletionChunk> {
 	const controller = new AbortController();
+	// The SDK aborts the request when the caller's signal does.
+	signal?.addEventListener("abort", () => controller.abort(), { once: true });
 	return new Stream(async function* () {
 		for (const [i, item] of items.entries()) {
 			if (controller.signal.aborted) return;
@@ -103,28 +106,31 @@ function sdkStream(
 }
 
 async function setup(
-	make: () => Stream<ChatCompletionChunk> = () => sdkStream(chunks()),
+	make: (signal?: AbortSignal) => Stream<ChatCompletionChunk> = (signal) =>
+		sdkStream(chunks(), undefined, signal),
 ) {
 	const streams: Stream<ChatCompletionChunk>[] = [];
-	const create = vi.fn(async (body: { stream?: boolean }) => {
-		if (!body.stream)
-			return {
-				id: "c",
-				object: "chat.completion",
-				created: 1,
-				model: "gpt-test",
-				choices: [
-					{
-						index: 0,
-						finish_reason: "stop",
-						message: { role: "assistant", content: "plain", refusal: null },
-					},
-				],
-			};
-		const s = make();
-		streams.push(s);
-		return s;
-	});
+	const create = vi.fn(
+		async (body: { stream?: boolean }, options?: { signal?: AbortSignal }) => {
+			if (!body.stream)
+				return {
+					id: "c",
+					object: "chat.completion",
+					created: 1,
+					model: "gpt-test",
+					choices: [
+						{
+							index: 0,
+							finish_reason: "stop",
+							message: { role: "assistant", content: "plain", refusal: null },
+						},
+					],
+				};
+			const s = make(options?.signal);
+			streams.push(s);
+			return s;
+		},
+	);
 	const client = { chat: { completions: { create } } } as unknown as OpenAI;
 	const table = uniqueTable();
 	await migrate(pool, { table, dimensions: 3 });
@@ -285,5 +291,64 @@ describe("withCache for OpenAI, streaming", () => {
 		await drain(await ai.chat.completions.create(body));
 
 		expect(create).toHaveBeenCalledTimes(2);
+	});
+
+	describe("chat.completions.stream()", () => {
+		const helperBody = { model: body.model, messages: body.messages };
+
+		it("should serve the helper from the cache, with the same final completion", async () => {
+			const { ai, cache, create } = await setup();
+
+			const first = await ai.chat.completions
+				.stream(helperBody)
+				.finalChatCompletion();
+			await cache.flush();
+			const second = await ai.chat.completions
+				.stream(helperBody)
+				.finalChatCompletion();
+
+			expect(create).toHaveBeenCalledTimes(1);
+			expect(second.choices[0]?.message).toEqual(first.choices[0]?.message);
+		});
+
+		it("should emit the helper's content events on a cached answer", async () => {
+			const { ai, cache } = await setup();
+			await ai.chat.completions.stream(helperBody).finalChatCompletion();
+			await cache.flush();
+
+			const deltas: string[] = [];
+			const runner = ai.chat.completions
+				.stream(helperBody)
+				.on("content", (delta) => deltas.push(delta));
+			await runner.finalChatCompletion();
+
+			expect(deltas.join("")).toBe("Click 'Forgot password'.");
+		});
+
+		it("should stop a cached answer when the helper is aborted", async () => {
+			const { ai, cache } = await setup();
+			await ai.chat.completions.stream(helperBody).finalChatCompletion();
+			await cache.flush();
+
+			const runner = ai.chat.completions.stream(helperBody);
+			const completed = vi.fn();
+			runner.on("chatCompletion", completed);
+			runner.on("chunk", () => runner.abort());
+
+			await expect(runner.finalChatCompletion()).rejects.toThrow();
+			expect(completed).not.toHaveBeenCalled();
+		});
+
+		it("should not store the answer when the helper is aborted on a miss", async () => {
+			const { ai, cache, create } = await setup();
+
+			const runner = ai.chat.completions.stream(helperBody);
+			runner.on("chunk", () => runner.abort());
+			await expect(runner.finalChatCompletion()).rejects.toThrow();
+			await cache.flush();
+			await ai.chat.completions.stream(helperBody).finalChatCompletion();
+
+			expect(create).toHaveBeenCalledTimes(2);
+		});
 	});
 });
