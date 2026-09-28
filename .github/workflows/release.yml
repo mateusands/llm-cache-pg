@@ -30,7 +30,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write # GitHub release
-      id-token: write # npm provenance
+      id-token: write # npm trusted publishing and provenance
     steps:
       - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v6
@@ -52,9 +52,9 @@ jobs:
       - run: pnpm test
       - run: pnpm build
       - run: node test/consumer/smoke.mjs
-      - run: npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      # Trusted publishing (OIDC) needs npm 11.5.1+; provenance is then generated automatically.
+      - run: npm install -g npm@^11.5.1
+      - run: npm publish --access public
       - name: GitHub release from the changelog
         env:
           GH_TOKEN: ${{ github.token }}
