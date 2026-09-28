@@ -4,7 +4,7 @@
 
 **Semantic cache for LLM calls in TypeScript, backed by plain PostgreSQL + pgvector.** Runs on any Postgres that has pgvector (RDS, Supabase, Neon, self-hosted) with no custom extension to install. Wraps your OpenAI or Anthropic call in one line, isolates data per tenant, and exports Prometheus metrics.
 
-> **Status: v0.5.** Pre-1.0: the API may still change between minor versions (see the [changelog](CHANGELOG.md)).
+> **Status: v0.6.** Pre-1.0: the API may still change between minor versions (see the [changelog](CHANGELOG.md)).
 
 ---
 
@@ -264,8 +264,14 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
 - [x] v0.3: Grafana dashboard, metrics demo, npm release
 - [x] v0.4: streaming responses, per-call threshold, exact-only mode
 - [x] v0.5: SDK `.stream()` helpers, streams with thinking and citations, admin CLI
-- [ ] later: streams with server tools, `cache.stats()` in the API
+- [x] v0.6: shadow mode, `cache.stats()`, server tools in Anthropic streams
 
 ## License
 
 [MIT](LICENSE)
+
+## About AI assistance
+
+This project was built with the help of artificial intelligence, used as an assistant throughout development and maintenance.
+
+In practice, AI takes on the repetitive, low-level work: writing the code for a path that has already been decided, converting icons, drafting and updating documentation, putting together validation scripts, tracking down the exact point of a defect. Decisions about scope, architecture and design are made by people, and every change goes through human review before it lands, including the ones the AI wrote entirely.

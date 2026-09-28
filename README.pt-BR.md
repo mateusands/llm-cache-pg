@@ -4,7 +4,7 @@
 
 **Cache semântico para chamadas de LLM em TypeScript, sobre PostgreSQL puro + pgvector.** Roda em qualquer Postgres com pgvector (RDS, Supabase, Neon, self-hosted), sem extensão customizada para instalar. Envolve sua chamada à OpenAI ou à Anthropic em uma linha, isola os dados por tenant e exporta métricas para o Prometheus.
 
-> **Status: v0.5.** Antes da 1.0, a API ainda pode mudar entre versões minor (veja o [changelog](CHANGELOG.md)).
+> **Status: v0.6.** Antes da 1.0, a API ainda pode mudar entre versões minor (veja o [changelog](CHANGELOG.md)).
 
 ---
 
@@ -264,8 +264,14 @@ Leia o [CONTRIBUTING.md](CONTRIBUTING.md) (em inglês) antes de abrir um pull re
 - [x] v0.3: dashboard do Grafana, demo de métricas, publicação no npm
 - [x] v0.4: respostas com streaming, threshold por chamada, modo só exato
 - [x] v0.5: helpers `.stream()` dos SDKs, streams com thinking e citações, CLI de administração
-- [ ] depois: streams com tools de servidor, `cache.stats()` na API
+- [x] v0.6: modo sombra, `cache.stats()`, tools de servidor nos streams da Anthropic
 
 ## Licença
 
 [MIT](LICENSE)
+
+## Sobre o uso de IA
+
+Este projeto foi construído com auxílio de inteligência artificial usada como assistente ao longo do desenvolvimento e da manutenção.
+
+Na prática, a IA entra no trabalho repetitivo e de baixo nível: escrever o código de um caminho já decidido, converter ícones, redigir e atualizar documentação, montar scripts de validação, procurar o ponto exato de um defeito. As decisões de escopo, arquitetura e desenho são humanas, e toda mudança passa por revisão de gente antes de entrar — inclusive as que a IA escreveu por inteiro.
