@@ -28,12 +28,16 @@
 	},
 	"files": [
 		"dist",
+		"bin",
 		"CHANGELOG.md"
 	],
 	"sideEffects": false,
 	"main": "./dist/index.cjs",
 	"module": "./dist/index.mjs",
 	"types": "./dist/index.d.cts",
+	"bin": {
+		"llm-cache-pg": "./bin/llm-cache-pg.mjs"
+	},
 	"exports": {
 		".": {
 			"import": {
@@ -95,13 +99,17 @@
 	},
 	"peerDependencies": {
 		"@anthropic-ai/sdk": ">=0.128.0",
-		"openai": "^7.0.0"
+		"openai": "^7.0.0",
+		"pg": "^8.0.0"
 	},
 	"peerDependenciesMeta": {
 		"@anthropic-ai/sdk": {
 			"optional": true
 		},
 		"openai": {
+			"optional": true
+		},
+		"pg": {
 			"optional": true
 		}
 	},

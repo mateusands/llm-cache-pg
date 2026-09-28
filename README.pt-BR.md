@@ -206,6 +206,20 @@ await cache.invalidate({ key: { model, messages }, namespace: tenantId }); // um
 
 Rode o `prune()` periodicamente se usar TTL: entradas expiradas nunca são servidas, mas ficam na tabela até lá. As duas chamadas lançam erro se falharem, ao contrário das buscas. Depois de apagar muitas linhas, um `VACUUM` deixa o Postgres reaproveitar o espaço do índice HNSW.
 
+### Pela linha de comando
+
+As mesmas operações, mais estatísticas, sem escrever script (precisa do `pg` instalado; a conexão vem do `DATABASE_URL` ou do `--url`):
+
+```sh
+npx llm-cache-pg migrate --dimensions 1536
+npx llm-cache-pg stats            # entradas, expiradas, hits, tamanho, principais namespaces e modelos; --json para scripts
+npx llm-cache-pg prune
+npx llm-cache-pg invalidate --namespace tenant-a         # dry run: mostra quantas entradas apagaria
+npx llm-cache-pg invalidate --namespace tenant-a --yes   # apaga
+```
+
+Todo comando aceita `--table`. Códigos de saída: 0 em sucesso, 1 em falha, 2 em uso inválido. A URL de conexão nunca é impressa.
+
 ## Usando sua própria ferramenta de migração
 
 `renderMigrationSql({ table, dimensions })` devolve o SQL idempotente que o `migrate()` executa, para colar em migrações do Prisma, Drizzle ou Flyway.
@@ -228,7 +242,8 @@ Leia o [CONTRIBUTING.md](CONTRIBUTING.md) (em inglês) antes de abrir um pull re
 - [x] v0.2: wrapper da Anthropic, prune/invalidate, métricas para o Prometheus, matriz de versões do pgvector, benchmark
 - [x] v0.3: dashboard do Grafana, demo de métricas, publicação no npm
 - [x] v0.4: respostas com streaming, threshold por chamada, modo só exato
-- [ ] depois: CLI de administração, cache dos helpers `.stream()` dos SDKs, streams com conteúdo além de texto
+- [x] v0.5: helpers `.stream()` dos SDKs, streams com thinking e citações, CLI de administração
+- [ ] depois: streams com tools de servidor, `cache.stats()` na API
 
 ## Licença
 

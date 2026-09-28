@@ -206,6 +206,20 @@ await cache.invalidate({ key: { model, messages }, namespace: tenantId }); // on
 
 Run `prune()` on a schedule when you use a TTL; expired entries are never served, but they stay in the table until then. Both calls throw on failure, unlike lookups. After deleting many rows, a `VACUUM` lets Postgres reuse the space in the HNSW index.
 
+### From the command line
+
+The same operations, plus stats, without writing a script (needs `pg` installed; the connection comes from `DATABASE_URL` or `--url`):
+
+```sh
+npx llm-cache-pg migrate --dimensions 1536
+npx llm-cache-pg stats            # entries, expired, hits, size, top namespaces and models; --json for scripts
+npx llm-cache-pg prune
+npx llm-cache-pg invalidate --namespace tenant-a         # dry run: prints how many entries it would delete
+npx llm-cache-pg invalidate --namespace tenant-a --yes   # deletes them
+```
+
+Every command takes `--table`. Exit codes: 0 on success, 1 on a failure, 2 on bad usage. The connection URL is never printed.
+
 ## Using your own migration tool
 
 `renderMigrationSql({ table, dimensions })` returns the idempotent SQL that `migrate()` runs, to paste into Prisma, Drizzle or Flyway migrations.
@@ -228,7 +242,8 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
 - [x] v0.2: Anthropic wrapper, prune/invalidate, Prometheus metrics, pgvector version matrix, benchmark
 - [x] v0.3: Grafana dashboard, metrics demo, npm release
 - [x] v0.4: streaming responses, per-call threshold, exact-only mode
-- [ ] later: admin CLI, caching the SDK `.stream()` helpers, streams with non-text content
+- [x] v0.5: SDK `.stream()` helpers, streams with thinking and citations, admin CLI
+- [ ] later: streams with server tools, `cache.stats()` in the API
 
 ## License
 

@@ -192,12 +192,8 @@ export interface EntryFilter {
 	key?: CacheKey;
 }
 
-/** Deletes entries matching every given filter. The caller guarantees at least one is set. */
-export async function deleteMatching(
-	pool: Pool,
-	table: string,
-	filter: EntryFilter,
-): Promise<number> {
+/** The WHERE clause for a filter, shared so a count always matches what a delete would remove. */
+function matching(filter: EntryFilter): { where: string; values: unknown[] } {
 	const conditions: string[] = [];
 	const values: unknown[] = [];
 	const add = (column: string, value: unknown) => {
@@ -212,9 +208,101 @@ export async function deleteMatching(
 		add("params_hash", filter.key.paramsHash);
 		add("prompt_hash", filter.key.promptHash);
 	}
+	if (conditions.length === 0)
+		throw new Error("An entry filter needs at least one condition");
+	return { where: conditions.join(" AND "), values };
+}
+
+/** Deletes entries matching every given filter. */
+export async function deleteMatching(
+	pool: Pool,
+	table: string,
+	filter: EntryFilter,
+): Promise<number> {
+	const { where, values } = matching(filter);
 	const { rowCount } = await pool.query(
-		`DELETE FROM ${table} WHERE ${conditions.join(" AND ")}`,
+		`DELETE FROM ${table} WHERE ${where}`,
 		values,
 	);
 	return rowCount ?? 0;
+}
+
+/** How many entries deleteMatching would remove for the same filter. */
+export async function countMatching(
+	pool: Pool,
+	table: string,
+	filter: EntryFilter,
+): Promise<number> {
+	const { where, values } = matching(filter);
+	const { rows } = await pool.query<{ n: number }>(
+		`SELECT count(*)::int AS n FROM ${table} WHERE ${where}`,
+		values,
+	);
+	return rows[0]?.n ?? 0;
+}
+
+export interface TableStats {
+	entries: number;
+	expired: number;
+	withoutEmbedding: number;
+	hits: number;
+	totalBytes: number;
+	indexBytes: number;
+	/** 1 for a table migrated before the migrations table existed. */
+	schemaVersion: number;
+	namespaces: { name: string; entries: number }[];
+	models: { name: string; entries: number }[];
+}
+
+/** Exact counts (count(*), not planner estimates) for the admin CLI. */
+export async function tableStats(
+	pool: Pool,
+	table: string,
+): Promise<TableStats> {
+	const totals = await pool.query<{
+		entries: number;
+		expired: number;
+		without_embedding: number;
+		hits: number;
+		total_bytes: number;
+		index_bytes: number;
+	}>(
+		`SELECT count(*)::int AS entries,
+		        count(*) FILTER (WHERE expires_at <= now())::int AS expired,
+		        count(*) FILTER (WHERE embedding IS NULL)::int AS without_embedding,
+		        coalesce(sum(hits), 0)::float8 AS hits,
+		        pg_total_relation_size(to_regclass($1))::float8 AS total_bytes,
+		        pg_indexes_size(to_regclass($1))::float8 AS index_bytes
+		   FROM ${table}`,
+		[table],
+	);
+	const row = totals.rows[0];
+	let schemaVersion = 1;
+	const hasMigrations = await pool.query<{ ok: boolean }>(
+		"SELECT to_regclass($1) IS NOT NULL AS ok",
+		[`${table}_migrations`],
+	);
+	if (hasMigrations.rows[0]?.ok) {
+		const v = await pool.query<{ v: number | null }>(
+			`SELECT max(version) AS v FROM ${table}_migrations`,
+		);
+		schemaVersion = v.rows[0]?.v ?? 1;
+	}
+	const top = async (column: "namespace" | "model") =>
+		(
+			await pool.query<{ name: string; entries: number }>(
+				`SELECT ${column} AS name, count(*)::int AS entries FROM ${table} GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT 10`,
+			)
+		).rows;
+	return {
+		entries: row?.entries ?? 0,
+		expired: row?.expired ?? 0,
+		withoutEmbedding: row?.without_embedding ?? 0,
+		hits: row?.hits ?? 0,
+		totalBytes: row?.total_bytes ?? 0,
+		indexBytes: row?.index_bytes ?? 0,
+		schemaVersion,
+		namespaces: await top("namespace"),
+		models: await top("model"),
+	};
 }
