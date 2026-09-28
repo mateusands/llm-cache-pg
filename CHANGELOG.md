@@ -4,6 +4,8 @@ All notable changes to this project. The format follows [Keep a Changelog](https
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-09-28
+
 ### Added
 
 - `llm-cache-pg` CLI: `migrate`, `stats`, `prune` and `invalidate` (a dry run unless `--yes`). Needs `pg`, now an optional peer dependency.
@@ -72,7 +74,8 @@ Not published to npm.
 - `llm-cache-pg/openai`: chat completions wrapper and embedder.
 - `cache.flush()` to wait for background writes before shutdown.
 
-[Unreleased]: https://github.com/mateusands/llm-cache-pg/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/mateusands/llm-cache-pg/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/mateusands/llm-cache-pg/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/mateusands/llm-cache-pg/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/mateusands/llm-cache-pg/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/mateusands/llm-cache-pg/compare/v0.1.0...v0.2.0

@@ -4,7 +4,7 @@
 
 **Semantic cache for LLM calls in TypeScript, backed by plain PostgreSQL + pgvector.** Runs on any Postgres that has pgvector (RDS, Supabase, Neon, self-hosted) with no custom extension to install. Wraps your OpenAI or Anthropic call in one line, isolates data per tenant, and exports Prometheus metrics.
 
-> **Status: v0.4.** Pre-1.0: the API may still change between minor versions (see the [changelog](CHANGELOG.md)).
+> **Status: v0.5.** Pre-1.0: the API may still change between minor versions (see the [changelog](CHANGELOG.md)).
 
 ---
 
