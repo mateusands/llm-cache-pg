@@ -1,125 +1,125 @@
 {
-  "name": "llm-cache-pg",
-  "version": "0.4.0",
-  "description": "Semantic cache for LLM calls on plain PostgreSQL + pgvector",
-  "keywords": [
-    "llm",
-    "cache",
-    "semantic-cache",
-    "pgvector",
-    "postgres",
-    "openai",
-    "anthropic",
-    "prometheus"
-  ],
-  "license": "MIT",
-  "author": "Mateus Andrade",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/mateusands/llm-cache-pg.git"
-  },
-  "homepage": "https://github.com/mateusands/llm-cache-pg#readme",
-  "bugs": {
-    "url": "https://github.com/mateusands/llm-cache-pg/issues"
-  },
-  "type": "module",
-  "engines": {
-    "node": ">=22"
-  },
-  "files": [
-    "dist",
-    "CHANGELOG.md"
-  ],
-  "sideEffects": false,
-  "main": "./dist/index.cjs",
-  "module": "./dist/index.mjs",
-  "types": "./dist/index.d.cts",
-  "exports": {
-    ".": {
-      "import": {
-        "types": "./dist/index.d.mts",
-        "default": "./dist/index.mjs"
-      },
-      "require": {
-        "types": "./dist/index.d.cts",
-        "default": "./dist/index.cjs"
-      }
-    },
-    "./openai": {
-      "import": {
-        "types": "./dist/openai.d.mts",
-        "default": "./dist/openai.mjs"
-      },
-      "require": {
-        "types": "./dist/openai.d.cts",
-        "default": "./dist/openai.cjs"
-      }
-    },
-    "./anthropic": {
-      "import": {
-        "types": "./dist/anthropic.d.mts",
-        "default": "./dist/anthropic.mjs"
-      },
-      "require": {
-        "types": "./dist/anthropic.d.cts",
-        "default": "./dist/anthropic.cjs"
-      }
-    },
-    "./prometheus": {
-      "import": {
-        "types": "./dist/prometheus.d.mts",
-        "default": "./dist/prometheus.mjs"
-      },
-      "require": {
-        "types": "./dist/prometheus.d.cts",
-        "default": "./dist/prometheus.cjs"
-      }
-    },
-    "./package.json": "./package.json"
-  },
-  "scripts": {
-    "build": "tsdown",
-    "typecheck": "tsc && tsc -p tsconfig.build.json",
-    "lint": "biome check .",
-    "format": "biome check --write .",
-    "test": "vitest run",
-    "test:integration": "vitest run --project integration",
-    "test:consumer": "pnpm build && node test/consumer/smoke.mjs",
-    "example": "pnpm build && node --env-file-if-exists=.env examples/openai-basic/index.ts",
-    "bench": "node --env-file-if-exists=.env bench/run.ts"
-  },
-  "packageManager": "pnpm@11.26.0",
-  "publishConfig": {
-    "access": "public",
-    "provenance": true
-  },
-  "peerDependencies": {
-    "@anthropic-ai/sdk": ">=0.128.0",
-    "openai": "^7.0.0"
-  },
-  "peerDependenciesMeta": {
-    "@anthropic-ai/sdk": {
-      "optional": true
-    },
-    "openai": {
-      "optional": true
-    }
-  },
-  "devDependencies": {
-    "@anthropic-ai/sdk": "0.128.0",
-    "@arethetypeswrong/core": "^0.18.5",
-    "@biomejs/biome": "^2.5.14",
-    "@prometheus-io/client": "0.16.1",
-    "@testcontainers/postgresql": "^12.1.0",
-    "@types/node": "^22.20.4",
-    "@types/pg": "^8.23.1",
-    "openai": "^7.23.0",
-    "pg": "^8.23.0",
-    "prom-client": "15.1.3",
-    "publint": "^0.3.24",
-    "testcontainers": "^12.1.0",
-    "tsdown": "^0.23.0",
-    "typescript": "^7.0.2",
-    "vitest": "^5.0.2"
-  }
+	"name": "llm-cache-pg",
+	"version": "0.4.0",
+	"description": "Semantic cache for LLM calls on plain PostgreSQL + pgvector",
+	"keywords": [
+		"llm",
+		"cache",
+		"semantic-cache",
+		"pgvector",
+		"postgres",
+		"openai",
+		"anthropic",
+		"prometheus"
+	],
+	"license": "MIT",
+	"author": "Mateus Andrade",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/mateusands/llm-cache-pg.git"
+	},
+	"homepage": "https://github.com/mateusands/llm-cache-pg#readme",
+	"bugs": {
+		"url": "https://github.com/mateusands/llm-cache-pg/issues"
+	},
+	"type": "module",
+	"engines": {
+		"node": ">=22"
+	},
+	"files": [
+		"dist",
+		"CHANGELOG.md"
+	],
+	"sideEffects": false,
+	"main": "./dist/index.cjs",
+	"module": "./dist/index.mjs",
+	"types": "./dist/index.d.cts",
+	"exports": {
+		".": {
+			"import": {
+				"types": "./dist/index.d.mts",
+				"default": "./dist/index.mjs"
+			},
+			"require": {
+				"types": "./dist/index.d.cts",
+				"default": "./dist/index.cjs"
+			}
+		},
+		"./openai": {
+			"import": {
+				"types": "./dist/openai.d.mts",
+				"default": "./dist/openai.mjs"
+			},
+			"require": {
+				"types": "./dist/openai.d.cts",
+				"default": "./dist/openai.cjs"
+			}
+		},
+		"./anthropic": {
+			"import": {
+				"types": "./dist/anthropic.d.mts",
+				"default": "./dist/anthropic.mjs"
+			},
+			"require": {
+				"types": "./dist/anthropic.d.cts",
+				"default": "./dist/anthropic.cjs"
+			}
+		},
+		"./prometheus": {
+			"import": {
+				"types": "./dist/prometheus.d.mts",
+				"default": "./dist/prometheus.mjs"
+			},
+			"require": {
+				"types": "./dist/prometheus.d.cts",
+				"default": "./dist/prometheus.cjs"
+			}
+		},
+		"./package.json": "./package.json"
+	},
+	"scripts": {
+		"build": "tsdown",
+		"typecheck": "tsc && tsc -p tsconfig.build.json",
+		"lint": "biome check .",
+		"format": "biome check --write .",
+		"test": "vitest run",
+		"test:integration": "vitest run --project integration",
+		"test:consumer": "pnpm build && node test/consumer/smoke.mjs",
+		"example": "pnpm build && node --env-file-if-exists=.env examples/openai-basic/index.ts",
+		"bench": "node --env-file-if-exists=.env bench/run.ts"
+	},
+	"packageManager": "pnpm@11.26.0",
+	"publishConfig": {
+		"access": "public",
+		"provenance": true
+	},
+	"peerDependencies": {
+		"@anthropic-ai/sdk": ">=0.128.0",
+		"openai": "^7.0.0"
+	},
+	"peerDependenciesMeta": {
+		"@anthropic-ai/sdk": {
+			"optional": true
+		},
+		"openai": {
+			"optional": true
+		}
+	},
+	"devDependencies": {
+		"@anthropic-ai/sdk": "0.128.0",
+		"@arethetypeswrong/core": "^0.18.5",
+		"@biomejs/biome": "^2.5.14",
+		"@prometheus-io/client": "0.16.1",
+		"@testcontainers/postgresql": "^12.1.0",
+		"@types/node": "^22.20.4",
+		"@types/pg": "^8.23.1",
+		"openai": "^7.23.0",
+		"pg": "^8.23.0",
+		"prom-client": "15.1.3",
+		"publint": "^0.3.24",
+		"testcontainers": "^12.1.0",
+		"tsdown": "^0.23.0",
+		"typescript": "^7.0.2",
+		"vitest": "^5.0.2"
+	}
 }
