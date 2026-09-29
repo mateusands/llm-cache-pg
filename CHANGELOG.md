@@ -4,6 +4,15 @@ All notable changes to this project. The format follows [Keep a Changelog](https
 
 ## [Unreleased]
 
+### Fixed
+
+- Two different requests could get the same cache key, and so the same answer: an own `__proto__` key was lost, and every `Date` (or other value with `toJSON`) hashed as `{}`. Keys now keep `__proto__`, follow `toJSON` like `JSON.stringify`, and plain JSON hashes exactly as before, so `KEY_VERSION` stays 1.
+- A key that cannot be built (a `BigInt` or a cycle in `params`) made `wrap()` reject instead of calling the model. It is now a bypass.
+
+### Changed
+
+- `params` values that are neither plain objects, arrays nor have `toJSON` (a `Map`, `Set`, `RegExp`, typed array or class instance) now bypass the cache instead of being hashed as `{}`. `invalidate({ key })` with such a key throws, as for any key that is never cached.
+
 ## [0.6.0] - 2026-09-28
 
 ### Added

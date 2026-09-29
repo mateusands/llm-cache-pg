@@ -433,6 +433,18 @@ describe("failing open", () => {
 		await down.end();
 	});
 
+	it("should call the model when the key cannot be built, instead of failing the call", async () => {
+		const { cache, events } = await migrated();
+		const fn = vi.fn(async () => ({ answer: "fresh" }));
+
+		await expect(
+			cache.wrap(fn, { key: request("x", { params: { big: 10n } }) }),
+		).resolves.toEqual({ answer: "fresh" });
+
+		expect(fn).toHaveBeenCalledTimes(1);
+		expect(events.at(-1)?.result).toBe("bypass");
+	});
+
 	it("should call the model and report it when the table was never migrated", async () => {
 		const { ask, calls, errors } = setup();
 
