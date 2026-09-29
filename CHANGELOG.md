@@ -7,6 +7,7 @@ All notable changes to this project. The format follows [Keep a Changelog](https
 ### Fixed
 
 - Two different requests could get the same cache key, and so the same answer: an own `__proto__` key was lost, and every `Date` (or other value with `toJSON`) hashed as `{}`. Keys now keep `__proto__`, follow `toJSON` like `JSON.stringify`, and plain JSON hashes exactly as before, so `KEY_VERSION` stays 1.
+- An OpenAI stream replayed from the cache lost its `logprobs`, `system_fingerprint` and `service_tier`. They are now stored and replayed as `ChatCompletionStream` accumulates them.
 - A key that cannot be built (a `BigInt` or a cycle in `params`) made `wrap()` reject instead of calling the model. It is now a bypass.
 
 ### Changed
