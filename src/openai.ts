@@ -109,18 +109,32 @@ function isPlainAnswer(response: ChatCompletion): boolean {
 /** Builds the final completion from stream chunks; null while incomplete or if not plain text. */
 function assembler() {
 	let head: Pick<ChatCompletionChunk, "id" | "created" | "model"> | undefined;
+	// Chunk-level fields the SDK keeps, last value winning; `obfuscation` is padding it drops.
+	let fields: Pick<ChatCompletion, "system_fingerprint" | "service_tier"> = {};
 	let usage: ChatCompletion["usage"];
 	let plainText = true;
 	const choices = new Map<
 		number,
-		{ content: string; finish: ChatCompletionChunk.Choice["finish_reason"] }
+		{
+			content: string;
+			finish: ChatCompletionChunk.Choice["finish_reason"];
+			logprobs: ChatCompletion.Choice["logprobs"];
+		}
 	>();
 	return {
 		add(chunk: ChatCompletionChunk): void {
 			head ??= { id: chunk.id, created: chunk.created, model: chunk.model };
 			if (chunk.usage) usage = chunk.usage;
+			if (chunk.system_fingerprint !== undefined)
+				fields = { ...fields, system_fingerprint: chunk.system_fingerprint };
+			if (chunk.service_tier !== undefined)
+				fields = { ...fields, service_tier: chunk.service_tier };
 			for (const c of chunk.choices) {
-				const entry = choices.get(c.index) ?? { content: "", finish: null };
+				const entry = choices.get(c.index) ?? {
+					content: "",
+					finish: null,
+					logprobs: null,
+				};
 				choices.set(c.index, entry);
 				if (
 					c.delta.tool_calls?.length ||
@@ -130,6 +144,20 @@ function assembler() {
 					plainText = false;
 				if (c.delta.content) entry.content += c.delta.content;
 				if (c.finish_reason) entry.finish = c.finish_reason;
+				// Like ChatCompletionStream: copy the first logprobs, then append later content tokens.
+				// Refusal logprobs are not appended: a refusal delta already makes the stream unstorable.
+				if (c.logprobs) {
+					if (!entry.logprobs)
+						entry.logprobs = {
+							...c.logprobs,
+							content: c.logprobs.content && [...c.logprobs.content],
+						};
+					else if (c.logprobs.content)
+						entry.logprobs.content = [
+							...(entry.logprobs.content ?? []),
+							...c.logprobs.content,
+						];
+				}
 			}
 		},
 		result(): ChatCompletion | null {
@@ -143,11 +171,12 @@ function assembler() {
 				return null;
 			return {
 				...head,
+				...fields,
 				object: "chat.completion",
 				choices: list.map(([index, c]) => ({
 					index,
 					finish_reason: c.finish as ChatCompletion.Choice["finish_reason"],
-					logprobs: null,
+					logprobs: c.logprobs,
 					message: { role: "assistant", content: c.content, refusal: null },
 				})),
 				...(usage ? { usage } : {}),
@@ -166,6 +195,13 @@ async function* replayChunks(
 		object: "chat.completion.chunk" as const,
 		created: completion.created,
 		model: completion.model,
+		// Only when stored: entries written before 0.6.1 have neither.
+		...(completion.system_fingerprint
+			? { system_fingerprint: completion.system_fingerprint }
+			: {}),
+		...(completion.service_tier !== undefined
+			? { service_tier: completion.service_tier }
+			: {}),
 		// With include_usage, every chunk carries `usage`, null until the last one.
 		...(includeUsage ? { usage: null } : {}),
 	};
@@ -185,7 +221,8 @@ async function* replayChunks(
 			index: c.index,
 			delta: { content: c.message.content ?? "" },
 			finish_reason: null,
-			logprobs: null,
+			// All of them at once, next to the content they describe.
+			logprobs: c.logprobs ?? null,
 		})),
 	};
 	yield each({}, true);

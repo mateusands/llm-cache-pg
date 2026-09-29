@@ -200,6 +200,94 @@ describe("withCache for OpenAI, streaming", () => {
 		expect(replayed.choices[0]?.finish_reason).toBe("stop");
 	});
 
+	it("should replay logprobs and chunk-level fields the SDK accumulates", async () => {
+		const token = (t: string, logprob: number) => ({
+			token: t,
+			logprob,
+			bytes: null,
+			top_logprobs: [],
+		});
+		const head = {
+			...base,
+			system_fingerprint: "fp_1",
+			service_tier: "default",
+		};
+		const withLogprobs = [
+			{
+				...head,
+				choices: [
+					{
+						index: 0,
+						delta: { role: "assistant", content: "" },
+						finish_reason: null,
+						logprobs: null,
+					},
+				],
+			},
+			{
+				...head,
+				choices: [
+					{
+						index: 0,
+						delta: { content: "Click " },
+						finish_reason: null,
+						logprobs: { content: [token("Click", -0.1)], refusal: null },
+					},
+				],
+			},
+			{
+				...head,
+				choices: [
+					{
+						index: 0,
+						delta: { content: "here." },
+						finish_reason: null,
+						logprobs: { content: [token(" here.", -0.2)], refusal: null },
+					},
+				],
+			},
+			{
+				...head,
+				choices: [
+					{ index: 0, delta: {}, finish_reason: "stop", logprobs: null },
+				],
+			},
+		] as ChatCompletionChunk[];
+		const { ai, cache, create } = await setup(() => sdkStream(withLogprobs));
+		const original = await accumulate(sdkStream(withLogprobs));
+		const logprobsBody = { ...body, logprobs: true };
+
+		await drain(await ai.chat.completions.create(logprobsBody));
+		await cache.flush();
+		const replayed = await accumulate(
+			await ai.chat.completions.create(logprobsBody),
+		);
+
+		expect(create).toHaveBeenCalledTimes(1);
+		expect(original.choices[0]?.logprobs?.content).toHaveLength(2);
+		expect(replayed.choices[0]?.logprobs).toEqual(
+			original.choices[0]?.logprobs,
+		);
+		expect(replayed.system_fingerprint).toBe("fp_1");
+		expect(replayed.service_tier).toBe("default");
+	});
+
+	it("should replay a null service_tier as null, like the stream it came from", async () => {
+		const nulled = chunks().map((c) => ({
+			...c,
+			service_tier: null,
+		})) as ChatCompletionChunk[];
+		const { ai, cache } = await setup(() => sdkStream(nulled));
+		const original = await accumulate(sdkStream(nulled));
+
+		await drain(await ai.chat.completions.create(body));
+		await cache.flush();
+		const replayed = await accumulate(await ai.chat.completions.create(body));
+
+		expect(original.service_tier).toBeNull();
+		expect(replayed.service_tier).toBeNull();
+	});
+
 	it("should replay the usage chunk when the request asks for it, and store the token counts", async () => {
 		const { ai, cache, table } = await setup(() =>
 			sdkStream(chunks({ usage: true })),
