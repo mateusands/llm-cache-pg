@@ -272,6 +272,22 @@ describe("withCache for OpenAI, streaming", () => {
 		expect(replayed.service_tier).toBe("default");
 	});
 
+	it("should replay a null service_tier as null, like the stream it came from", async () => {
+		const nulled = chunks().map((c) => ({
+			...c,
+			service_tier: null,
+		})) as ChatCompletionChunk[];
+		const { ai, cache } = await setup(() => sdkStream(nulled));
+		const original = await accumulate(sdkStream(nulled));
+
+		await drain(await ai.chat.completions.create(body));
+		await cache.flush();
+		const replayed = await accumulate(await ai.chat.completions.create(body));
+
+		expect(original.service_tier).toBeNull();
+		expect(replayed.service_tier).toBeNull();
+	});
+
 	it("should replay the usage chunk when the request asks for it, and store the token counts", async () => {
 		const { ai, cache, table } = await setup(() =>
 			sdkStream(chunks({ usage: true })),

@@ -145,6 +145,7 @@ function assembler() {
 				if (c.delta.content) entry.content += c.delta.content;
 				if (c.finish_reason) entry.finish = c.finish_reason;
 				// Like ChatCompletionStream: copy the first logprobs, then append later content tokens.
+				// Refusal logprobs are not appended: a refusal delta already makes the stream unstorable.
 				if (c.logprobs) {
 					if (!entry.logprobs)
 						entry.logprobs = {
@@ -198,7 +199,7 @@ async function* replayChunks(
 		...(completion.system_fingerprint
 			? { system_fingerprint: completion.system_fingerprint }
 			: {}),
-		...(completion.service_tier
+		...(completion.service_tier !== undefined
 			? { service_tier: completion.service_tier }
 			: {}),
 		// With include_usage, every chunk carries `usage`, null until the last one.
