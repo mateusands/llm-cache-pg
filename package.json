@@ -1,6 +1,6 @@
 {
 	"name": "llm-cache-pg",
-	"version": "0.6.0",
+	"version": "0.6.1",
 	"description": "Semantic cache for LLM calls on plain PostgreSQL + pgvector",
 	"keywords": [
 		"llm",
