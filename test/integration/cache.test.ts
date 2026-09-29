@@ -445,6 +445,17 @@ describe("failing open", () => {
 		expect(events.at(-1)?.result).toBe("bypass");
 	});
 
+	it("should report why a key could not be built", async () => {
+		const { cache, errors } = await migrated();
+
+		await cache.wrap(async () => 1, {
+			key: request("x", { params: { when: new Map() } }),
+		});
+
+		expect(errors.map((e) => e.stage)).toEqual(["key"]);
+		expect(String(errors[0]?.error)).toMatch(/Map/);
+	});
+
 	it("should call the model and report it when the table was never migrated", async () => {
 		const { ask, calls, errors } = setup();
 

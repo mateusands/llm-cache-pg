@@ -1,4 +1,9 @@
-import { type CacheKey, deriveKey, type KeyInput } from "./key.ts";
+import {
+	type CacheKey,
+	deriveKey,
+	type KeyInput,
+	tryDeriveKey,
+} from "./key.ts";
 import {
 	inspectTable,
 	resolveMigrationOptions,
@@ -32,7 +37,8 @@ export type ErrorStage =
 	| "embed"
 	| "semantic"
 	| "store"
-	| "hit";
+	| "hit"
+	| "key";
 
 export interface LookupEvent {
 	result: LookupResult;
@@ -331,6 +337,13 @@ export function createCache(options: CacheOptions): Cache {
 
 	const flag = (mode: Mode) => (mode.shadow ? { shadow: true } : {});
 
+	/** The key, or null for a bypass; says why when part of the request cannot be hashed. */
+	function keyOf(input: KeyInput): CacheKey | null {
+		const { key, error } = tryDeriveKey(input);
+		if (error !== undefined) report(error, "key");
+		return key;
+	}
+
 	/** Reports a shadow hit once the fresh answer exists and would itself have been stored. */
 	function reportShadow(
 		hit: CachedResponse<unknown>,
@@ -526,7 +539,7 @@ export function createCache(options: CacheOptions): Cache {
 			const namespace = resolveNamespace(wrapOptions.namespace);
 			const mode = resolveMode(wrapOptions);
 			if (wrapOptions.ttl !== undefined) parseTtl(wrapOptions.ttl);
-			const key = deriveKey(wrapOptions.key);
+			const key = keyOf(wrapOptions.key);
 			if (!key) {
 				emit({ result: "bypass", namespace, durations: {}, ...flag(mode) });
 				return fn();
@@ -562,7 +575,7 @@ export function createCache(options: CacheOptions): Cache {
 			const namespace = resolveNamespace(callOptions?.namespace);
 			const mode = resolveMode(callOptions);
 			if (callOptions?.ttl !== undefined) parseTtl(callOptions.ttl);
-			const key = deriveKey(keyInput);
+			const key = keyOf(keyInput);
 			if (!key) {
 				emit({ result: "bypass", namespace, durations: {}, ...flag(mode) });
 				return { hit: null, store: () => {} };
@@ -600,7 +613,7 @@ export function createCache(options: CacheOptions): Cache {
 		): Promise<CachedResponse<R> | null> {
 			const namespace = resolveNamespace(callOptions?.namespace);
 			const mode = resolveMode(callOptions);
-			const key = deriveKey(keyInput);
+			const key = keyOf(keyInput);
 			if (!key) {
 				emit({ result: "bypass", namespace, durations: {}, ...flag(mode) });
 				return null;
@@ -614,7 +627,7 @@ export function createCache(options: CacheOptions): Cache {
 			callOptions?: CallOptions & { usage?: Usage },
 		): Promise<void> {
 			const namespace = resolveNamespace(callOptions?.namespace);
-			const key = deriveKey(keyInput);
+			const key = keyOf(keyInput);
 			if (!key) return;
 			try {
 				const s = await ensureSetup();

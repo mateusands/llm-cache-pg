@@ -2,7 +2,8 @@ import { createHash } from "node:crypto";
 
 /**
  * Bumped whenever the hashing below changes for plain JSON, so rows written under the old format
- * stop matching. Still 1 after 0.6.1: that fix only changed inputs that used to collide.
+ * stop matching. Still 1 after 0.6.1: plain JSON hashes byte for byte as before; only non-JSON
+ * values (Date, Buffer, Map, class instances) changed.
  */
 export const KEY_VERSION = 1;
 
@@ -29,7 +30,10 @@ export interface CacheKey {
 	text: string;
 }
 
-/** A value the key cannot tell apart from a different one, such as a Map or a class instance. */
+/**
+ * A value the key does not hash, such as a Map, Set or class instance: their state can live in the
+ * prototype (getters, private fields) or have no own keys at all, so two different ones could match.
+ */
 export class UnkeyableValueError extends Error {
 	constructor(kind: string) {
 		super(`Cannot build a cache key from a ${kind}`);
@@ -42,23 +46,31 @@ export class UnkeyableValueError extends Error {
  * UnkeyableValueError for objects that are neither plain, arrays, nor have a toJSON method.
  */
 export function canonicalJson(value: unknown): string {
-	return JSON.stringify(sortKeys(value, ""));
+	return JSON.stringify(sortKeys(value, "", false));
 }
 
-function sortKeys(value: unknown, key: string): unknown {
-	const v = value as { toJSON?: unknown } | null;
-	if (typeof v?.toJSON === "function") return sortKeys(v.toJSON(key), key);
-	if (Array.isArray(value))
-		return value.map((item, i) => sortKeys(item, String(i)));
-	if (value === null || typeof value !== "object") return value;
+function isPlainObject(value: object): boolean {
 	const proto = Object.getPrototypeOf(value);
-	// A Map, Set or class instance has no own keys to tell two of them apart, so it would collide.
-	if (proto !== Object.prototype && proto !== null)
-		throw new UnkeyableValueError(value.constructor?.name ?? "object");
+	// Object.prototype of any realm (vm, jsdom, some edge runtimes) has a null prototype itself.
+	return proto === null || Object.getPrototypeOf(proto) === null;
+}
+
+/** `jsonDone`: the value already came out of a toJSON call, which JSON.stringify never repeats. */
+function sortKeys(value: unknown, key: string, jsonDone: boolean): unknown {
+	const v = value as { toJSON?: unknown } | null;
+	if (!jsonDone && typeof v?.toJSON === "function")
+		return sortKeys(v.toJSON(key), key, true);
+	if (Array.isArray(value))
+		return value.map((item, i) => sortKeys(item, String(i), false));
+	if (value === null || typeof value !== "object") return value;
+	if (!isPlainObject(value))
+		throw new UnkeyableValueError(value.constructor?.name || "object");
 	// No prototype, so an own "__proto__" key stays a key instead of replacing the prototype.
 	const sorted: Record<string, unknown> = Object.create(null);
 	for (const k of Object.keys(value).sort()) {
-		sorted[k] = sortKeys((value as Record<string, unknown>)[k], k);
+		const item = (value as Record<string, unknown>)[k];
+		// JSON drops function values in objects anyway; copying one named toJSON would get it called.
+		if (typeof item !== "function") sorted[k] = sortKeys(item, k, false);
 	}
 	return sorted;
 }
@@ -81,24 +93,18 @@ function textOf(content: unknown): string | null {
 }
 
 /**
- * Splits a request into the exact partition and the semantic text.
- * Returns null when the request must bypass the cache: the last message is not from the user,
- * it carries anything other than text, or part of it cannot be hashed safely.
+ * Splits a request into the exact partition and the semantic text. `key` is null when the request
+ * must bypass the cache: the last message is not from the user, it carries anything other than
+ * text, or part of it cannot be hashed safely, in which case `error` says why.
  */
-export function deriveKey(input: KeyInput): CacheKey | null {
-	try {
-		return buildKey(input);
-	} catch {
-		// Unkeyable values, BigInt, cycles: bypassing is the safe side, and the call still reaches the model.
-		return null;
-	}
-}
-
-function buildKey(input: KeyInput): CacheKey | null {
+export function tryDeriveKey(input: KeyInput): {
+	key: CacheKey | null;
+	error?: unknown;
+} {
 	const last = input.messages.at(-1);
-	if (last?.role !== "user") return null;
+	if (last?.role !== "user") return { key: null };
 	const text = textOf(last.content);
-	if (text === null) return null;
+	if (text === null) return { key: null };
 
 	const { content: _, ...lastWithoutContent } = last;
 	const partition = {
@@ -106,10 +112,24 @@ function buildKey(input: KeyInput): CacheKey | null {
 		context: input.messages.slice(0, -1),
 		last: lastWithoutContent,
 	};
+	let json: string;
+	try {
+		json = canonicalJson(partition);
+	} catch (error) {
+		// Unkeyable values, BigInt, cycles: bypassing is the safe side, and the call still reaches the model.
+		return { key: null, error };
+	}
 	return {
-		model: input.model,
-		paramsHash: sha256(canonicalJson(partition)),
-		promptHash: sha256(text),
-		text,
+		key: {
+			model: input.model,
+			paramsHash: sha256(json),
+			promptHash: sha256(text),
+			text,
+		},
 	};
+}
+
+/** tryDeriveKey without the reason. */
+export function deriveKey(input: KeyInput): CacheKey | null {
+	return tryDeriveKey(input).key;
 }

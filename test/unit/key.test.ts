@@ -3,6 +3,7 @@
  * only part compared by vector. Anything left out of the partition can produce a false hit, which
  * is the failure this library exists to avoid.
  */
+import { runInNewContext } from "node:vm";
 import { describe, expect, it } from "vitest";
 import { canonicalJson, deriveKey, type KeyInput } from "../../src/key.ts";
 
@@ -191,6 +192,23 @@ describe("values that plain copying used to lose", () => {
 		cyclic.self = cyclic;
 		expect(hash({ big: 10n })).toBeUndefined();
 		expect(hash({ cyclic })).toBeUndefined();
+	});
+
+	it("should treat a plain object from another realm like a local one", () => {
+		expect(hash({ v: runInNewContext("({ a: 1 })") })).toBe(
+			hash({ v: { a: 1 } }),
+		);
+	});
+
+	it("should call toJSON once per value, as JSON.stringify does", () => {
+		const value = { toJSON: () => ({ toJSON: () => 1, a: 1 }) };
+		expect(canonicalJson({ v: value })).toBe(JSON.stringify({ v: value }));
+	});
+
+	it("should still throw on a malformed input instead of hiding it as a bypass", () => {
+		expect(() =>
+			deriveKey({ model: "m", messages: undefined as never }),
+		).toThrow();
 	});
 
 	it("should hash plain JSON exactly as before, so KEY_VERSION does not need to change", () => {
